@@ -2,21 +2,34 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { MessageSquare } from "lucide-react";
 
 type AuthFormProps = {
   mode: "login" | "signup";
-  onSubmit: (email: string, password: string) => void;
+  onSubmit: (email: string, password: string) => void | Promise<void>;
   onToggleMode: () => void;
+  isLoading?: boolean;
 };
 
-export function AuthForm({ mode, onSubmit, onToggleMode }: AuthFormProps) {
+export function AuthForm({
+  mode,
+  onSubmit,
+  onToggleMode,
+  isLoading,
+}: AuthFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     onSubmit(email, password);
   };
 
@@ -64,13 +77,26 @@ export function AuthForm({ mode, onSubmit, onToggleMode }: AuthFormProps) {
                 data-testid="input-password"
               />
             </div>
-            <Button type="submit" className="w-full" data-testid="button-submit">
-              {mode === "login" ? "Sign in" : "Create account"}
+            <Button
+              type="submit"
+              className="w-full"
+              data-testid="button-submit"
+              disabled={isLoading}
+            >
+              {isLoading
+                ? mode === "login"
+                  ? "Signing in..."
+                  : "Creating account..."
+                : mode === "login"
+                ? "Sign in"
+                : "Create account"}
             </Button>
           </form>
           <div className="mt-4 text-center text-sm">
             <span className="text-muted-foreground">
-              {mode === "login" ? "Don't have an account?" : "Already have an account?"}
+              {mode === "login"
+                ? "Don't have an account?"
+                : "Already have an account?"}
             </span>{" "}
             <button
               onClick={onToggleMode}

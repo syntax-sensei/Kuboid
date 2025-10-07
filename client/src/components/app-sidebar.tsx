@@ -1,4 +1,10 @@
-import { LayoutDashboard, FileText, Code2, BarChart3, Settings } from "lucide-react";
+import {
+  LayoutDashboard,
+  FileText,
+  Code2,
+  BarChart3,
+  LogOut,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -14,6 +20,9 @@ import {
 import { Link, useLocation } from "wouter";
 import { MessageSquare } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 
 const menuItems = [
   {
@@ -40,6 +49,26 @@ const menuItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { signOut } = useAuth();
+  const { toast } = useToast();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      toast({
+        title: "Signed out",
+        description: "Come back soon!",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to sign out";
+      toast({
+        title: "Sign out failed",
+        description: message,
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <Sidebar>
@@ -75,7 +104,18 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4">
-        <ThemeToggle />
+        <div className="flex items-center justify-between gap-2">
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleSignOut}
+            data-testid="button-sign-out"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="sr-only">Sign out</span>
+          </Button>
+        </div>
       </SidebarFooter>
     </Sidebar>
   );
