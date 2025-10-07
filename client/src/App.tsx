@@ -13,6 +13,7 @@ import Dashboard from "@/pages/Dashboard";
 import Documents from "@/pages/Documents";
 import Widget from "@/pages/Widget";
 import Analytics from "@/pages/Analytics";
+import Integrations from "@/pages/Integrations";
 
 function DashboardLayout() {
   const style = {
@@ -34,6 +35,7 @@ function DashboardLayout() {
               <Route path="/documents" component={Documents} />
               <Route path="/widget" component={Widget} />
               <Route path="/analytics" component={Analytics} />
+              <Route path="/integrations" component={Integrations} />
             </Switch>
           </main>
         </div>
@@ -76,6 +78,7 @@ export default function App() {
               <Route path="/documents" component={GuardedDashboardLayout} />
               <Route path="/widget" component={GuardedDashboardLayout} />
               <Route path="/analytics" component={GuardedDashboardLayout} />
+              <Route path="/integrations" component={GuardedDashboardLayout} />
               <Route path="/">
                 <Redirect to="/auth" />
               </Route>

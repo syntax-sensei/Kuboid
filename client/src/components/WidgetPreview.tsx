@@ -3,6 +3,7 @@ import { MessageCircle, X, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 
 type WidgetPreviewProps = {
   primaryColor: string;
@@ -24,30 +25,41 @@ export function WidgetPreview({
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
 
-  const positionClasses = position === "bottom-right" ? "right-6" : "left-6";
+  const containerAlignment =
+    position === "bottom-right" ? "justify-end" : "justify-start";
 
   return (
-    <div className="relative w-full h-96 bg-muted/30 rounded-lg border border-border overflow-hidden">
-      <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
-        Widget Preview
-      </div>
+    <div
+      className={cn(
+        "relative flex min-h-[32rem] w-full rounded-lg border border-border bg-muted/30 p-6 items-end gap-4",
+        containerAlignment
+      )}
+    >
+      {!isOpen && (
+        <div className="pointer-events-none absolute inset-6 flex items-center justify-center text-sm text-muted-foreground">
+          Widget Preview
+        </div>
+      )}
 
       {/* Chat bubble */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className={`absolute bottom-6 ${positionClasses} w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:scale-110 transition-transform`}
+          className="w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:scale-110 transition-transform"
           style={{ backgroundColor: primaryColor }}
           data-testid="button-widget-bubble"
         >
-          <MessageCircle className="h-6 w-6" style={{ color: backgroundColor }} />
+          <MessageCircle
+            className="h-6 w-6"
+            style={{ color: backgroundColor }}
+          />
         </button>
       )}
 
       {/* Chat window */}
       {isOpen && (
         <div
-          className={`absolute bottom-6 ${positionClasses} w-80 h-[500px] rounded-lg shadow-2xl flex flex-col`}
+          className="w-full max-w-sm h-[500px] rounded-lg shadow-2xl flex flex-col"
           style={{ backgroundColor }}
         >
           {/* Header */}
@@ -96,7 +108,10 @@ export function WidgetPreview({
               />
               <Button
                 size="icon"
-                style={{ backgroundColor: primaryColor, color: backgroundColor }}
+                style={{
+                  backgroundColor: primaryColor,
+                  color: backgroundColor,
+                }}
                 data-testid="button-widget-send"
               >
                 <Send className="h-4 w-4" />

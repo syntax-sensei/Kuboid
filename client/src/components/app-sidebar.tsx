@@ -3,6 +3,7 @@ import {
   FileText,
   Code2,
   BarChart3,
+  PlugZap,
   LogOut,
 } from "lucide-react";
 import {
@@ -44,6 +45,11 @@ const menuItems = [
     title: "Analytics",
     url: "/analytics",
     icon: BarChart3,
+  },
+  {
+    title: "Integrations",
+    url: "/integrations",
+    icon: PlugZap,
   },
 ];
 
