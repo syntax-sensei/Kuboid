@@ -1,0 +1,24 @@
+<html>
+    <body>
+        <!-- SupportBot Widget -->
+<script>
+    (function() {
+      window.supportBotConfig = {
+    "primaryColor": "#3b83f7",
+    "backgroundColor": "#FFFFFF",
+    "position": "bottom-right",
+    "welcomeMessage": "Hello! How can I help you today?",
+    "placeholder": "Type your message...",
+    "showBranding": true,
+    "siteId": "demo-site",
+    "topK": 5,
+    "temperature": 0.5,
+    "apiBase": "http://localhost:8000"
+  };
+      var script = document.createElement('script');
+      script.src = 'http://localhost:8000/widget.js';
+      document.head.appendChild(script);
+    })();
+  </script>
+    </body>
+</html>

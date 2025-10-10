@@ -31,6 +31,7 @@ export function DocumentCard({
   onDelete,
 }: DocumentCardProps) {
   const Icon = type === "url" ? LinkIcon : FileText;
+  const descriptor = type === "url" ? "Website" : fileType?.toUpperCase() ?? "Document";
 
   return (
     <Card className="hover-elevate overflow-visible">
@@ -44,8 +45,7 @@ export function DocumentCard({
               {name}
             </h3>
             <p className="text-sm text-muted-foreground">
-              {type === "url" ? "Website" : fileType?.toUpperCase()} •{" "}
-              {formatDistanceToNow(uploadedAt, { addSuffix: true })}
+              {descriptor} • {formatDistanceToNow(uploadedAt, { addSuffix: true })}
             </p>
           </div>
           <DropdownMenu>

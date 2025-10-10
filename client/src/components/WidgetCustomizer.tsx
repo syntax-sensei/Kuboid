@@ -4,22 +4,26 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-type WidgetConfig = {
+export type WidgetConfig = {
   primaryColor: string;
   backgroundColor: string;
   position: "bottom-right" | "bottom-left";
   welcomeMessage: string;
   placeholder: string;
   showBranding: boolean;
+  siteId: string;
+  topK: number;
+  temperature: number;
+  apiBase: string;
 };
 
-type WidgetCustomizerProps = {
+export type WidgetCustomizerProps = {
   config: WidgetConfig;
   onChange: (config: WidgetConfig) => void;
 };
 
 export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
-  const updateConfig = (key: keyof WidgetConfig, value: any) => {
+  const updateConfig = (key: keyof WidgetConfig, value: WidgetConfig[typeof key]) => {
     onChange({ ...config, [key]: value });
   };
 
@@ -74,7 +78,7 @@ export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
             <Label>Position</Label>
             <RadioGroup
               value={config.position}
-              onValueChange={(value) => updateConfig("position", value)}
+              onValueChange={(value) => updateConfig("position", value as WidgetConfig["position"])}
             >
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="bottom-right" id="bottom-right" data-testid="radio-bottom-right" />
@@ -111,6 +115,55 @@ export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
               onChange={(e) => updateConfig("placeholder", e.target.value)}
               data-testid="input-placeholder"
             />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="site-id">Site ID</Label>
+              <Input
+                id="site-id"
+                value={config.siteId}
+                onChange={(e) => updateConfig("siteId", e.target.value)}
+                data-testid="input-customizer-site-id"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="api-base">API Base URL</Label>
+              <Input
+                id="api-base"
+                value={config.apiBase}
+                onChange={(e) => updateConfig("apiBase", e.target.value)}
+                data-testid="input-customizer-api-base"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="top-k">Top K results</Label>
+              <Input
+                id="top-k"
+                type="number"
+                min={1}
+                max={10}
+                value={config.topK}
+                onChange={(e) => updateConfig("topK", Number(e.target.value))}
+                data-testid="input-customizer-topk"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="temperature">Temperature</Label>
+              <Input
+                id="temperature"
+                type="number"
+                step={0.1}
+                min={0}
+                max={1}
+                value={config.temperature}
+                onChange={(e) => updateConfig("temperature", Number(e.target.value))}
+                data-testid="input-customizer-temperature"
+              />
+            </div>
           </div>
 
           <div className="flex items-center justify-between">

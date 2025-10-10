@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+python-multipart
+supabase
+langchain
+langchain-community
+qdrant-client
+pypdf2
+python-docx
+openpyxl
+python-pptx
+pandas
+numpy
+python-dotenv
+httpx
+pydantic
+openai
