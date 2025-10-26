@@ -57,7 +57,9 @@ logger = logging.getLogger(__name__)
 # Initialize clients using config
 supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY)
 qdrant_client = QdrantClient(url=Config.QDRANT_URL)
-embeddings = OpenAIEmbeddings(openai_api_key=Config.OPENAI_API_KEY, model="text-embedding-3-large")
+embeddings = OpenAIEmbeddings(
+    openai_api_key=Config.OPENAI_API_KEY, model="text-embedding-3-large"
+)
 
 # Collection name for Qdrant
 COLLECTION_NAME = Config.COLLECTION_NAME
@@ -69,27 +71,27 @@ FRONTEND_WIDGET_SCRIPT = os.getenv("FRONTEND_WIDGET_SCRIPT", "/widget.js")
 
 class DocumentProcessor:
     """Handles document processing pipeline"""
-    
+
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=Config.CHUNK_SIZE,
             chunk_overlap=Config.CHUNK_OVERLAP,
             length_function=len,
         )
-    
+
     def extract_text_from_file(self, file_content: bytes, file_name: str) -> str:
         """Extract text from various file formats"""
         file_extension = Path(file_name).suffix.lower()
-        
+
         try:
-            if file_extension == '.pdf':
+            if file_extension == ".pdf":
                 return self._extract_from_pdf(file_content)
-            elif file_extension == '.docx':
+            elif file_extension == ".docx":
                 return self._extract_from_docx(file_content)
-            elif file_extension == '.xlsx':
+            elif file_extension == ".xlsx":
                 return self._extract_from_xlsx(file_content)
-            elif file_extension == '.txt':
-                return file_content.decode('utf-8')
+            elif file_extension == ".txt":
+                return file_content.decode("utf-8")
 
             else:
                 logger.warning(f"Unsupported file format: {file_extension}")
@@ -97,7 +99,7 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Error extracting text from {file_name}: {str(e)}")
             return ""
-    
+
     def _extract_from_pdf(self, file_content: bytes) -> str:
         """Extract text from PDF"""
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
@@ -105,7 +107,7 @@ class DocumentProcessor:
         for page in pdf_reader.pages:
             text += page.extract_text() + "\n"
         return text
-    
+
     def _extract_from_docx(self, file_content: bytes) -> str:
         """Extract text from DOCX"""
         doc = Document(io.BytesIO(file_content))
@@ -113,7 +115,7 @@ class DocumentProcessor:
         for paragraph in doc.paragraphs:
             text += paragraph.text + "\n"
         return text
-    
+
     def _extract_from_xlsx(self, file_content: bytes) -> str:
         """Extract text from XLSX"""
         workbook = openpyxl.load_workbook(io.BytesIO(file_content))
@@ -129,52 +131,60 @@ class DocumentProcessor:
         downloaded = trafilatura.fetch_url(url)
         extracted_text = trafilatura.extract(downloaded)
         return extracted_text
-        
 
-    def chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[LangChainDocument]:
+    def chunk_text(
+        self, text: str, metadata: Dict[str, Any]
+    ) -> List[LangChainDocument]:
         """Split text into chunks"""
         if not text.strip():
             return []
-        
+
         # Create LangChain document
         doc = LangChainDocument(page_content=text, metadata=metadata)
-        
+
         # Split into chunks
         chunks = self.text_splitter.split_documents([doc])
         return chunks
-    
-    async def generate_embeddings(self, chunks: List[LangChainDocument]) -> List[List[float]]:
+
+    async def generate_embeddings(
+        self, chunks: List[LangChainDocument]
+    ) -> List[List[float]]:
         """Generate embeddings for text chunks"""
         if not chunks:
             return []
-        
+
         texts = [chunk.page_content for chunk in chunks]
         embeddings_list = await embeddings.aembed_documents(texts)
         return embeddings_list
-    
-    async def store_in_qdrant(self, chunks: List[LangChainDocument], embeddings_list: List[List[float]], document_id: str):
+
+    async def store_in_qdrant(
+        self,
+        chunks: List[LangChainDocument],
+        embeddings_list: List[List[float]],
+        document_id: str,
+    ):
         """Store chunks and embeddings in Qdrant"""
         if not chunks or not embeddings_list:
             return
-        
+
         # Ensure collection exists
         try:
             qdrant_client.get_collection(COLLECTION_NAME)
         except:
             qdrant_client.create_collection(
                 collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
             )
-        
+
         # Generate valid UUIDs for point IDs
         import uuid
-        
+
         # Prepare points for Qdrant
         points = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings_list)):
             # Generate a valid UUID for each point
             point_id = str(uuid.uuid4())
-            
+
             point = PointStruct(
                 id=point_id,
                 vector=embedding,
@@ -183,42 +193,55 @@ class DocumentProcessor:
                     "metadata": chunk.metadata,
                     "document_id": document_id,
                     "chunk_index": i,
-                    "created_at": datetime.now().isoformat()
-                }
+                    "created_at": datetime.now().isoformat(),
+                },
             )
             points.append(point)
-        
+
         # Insert points into Qdrant
-        qdrant_client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points
-        )
-        
+        qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)
+
         logger.info(f"Stored {len(points)} chunks for document {document_id}")
+
 
 class IngestionPipeline:
     """Main ingestion pipeline"""
-    
+
     def __init__(self):
         self.processor = DocumentProcessor()
- 
+
     async def _record_url_activity(self, payload: Dict[str, Any]) -> None:
         logger.info("Persisting URL activity %s", payload.get("id"))
         if not payload.get("url"):
             raise ValueError("URL is required for activity records")
         try:
-            supabase.table(URL_ACTIVITY_TABLE).upsert(payload, on_conflict="id").execute()
+            supabase.table(URL_ACTIVITY_TABLE).upsert(
+                payload, on_conflict="id"
+            ).execute()
         except Exception as exc:
             logger.error("Failed to persist URL activity: %s", exc)
             raise
 
-    async def _record_url_activity_start(self, request_id: str, url: str, metadata: Dict[str, Any] | None = None):
+    async def _record_url_activity_start(
+        self,
+        request_id: str,
+        url: str,
+        site_id: str | None = None,
+        user_id: str | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ):
         payload = {
             "id": request_id,
             "url": url,
             "status": "processing",
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        if site_id is not None:
+            payload["site_id"] = site_id
+        if user_id is not None:
+            payload["user_id"] = user_id
+
         if metadata is not None:
             payload["metadata"] = metadata
         await self._record_url_activity(payload)
@@ -232,6 +255,8 @@ class IngestionPipeline:
         chunks_created: int | None = None,
         error: str | None = None,
         metadata: Dict[str, Any] | None = None,
+        site_id: str | None = None,
+        user_id: str | None = None,
     ):
         payload = {
             "id": request_id,
@@ -241,13 +266,24 @@ class IngestionPipeline:
         }
         if chunks_created is not None:
             payload["chunks_created"] = chunks_created
+
         if error is not None:
             payload["error"] = error[:500]
+
         if metadata is not None:
             payload["metadata"] = metadata
+
+        if site_id is not None:
+            payload["site_id"] = site_id
+
+        if user_id is not None:
+            payload["user_id"] = user_id
+
         await self._record_url_activity(payload)
 
-    async def process_document_from_url(self, url: str) -> Dict[str, Any]:
+    async def process_document_from_url(
+        self, url: str, user_id: str | None = None, site_id: str | None = None
+    ) -> Dict[str, Any]:
         """Process content fetched directly from a URL"""
         try:
             logger.info(f"🌐 Processing URL: {url}")
@@ -260,8 +296,13 @@ class IngestionPipeline:
                 "source": "url",
                 "url": url,
                 "processed_at": datetime.now().isoformat(),
-                "text_length": len(text)
+                "text_length": len(text),
             }
+
+            if user_id is not None:
+                metadata["user_id"] = user_id
+            if site_id is not None:
+                metadata["site_id"] = site_id
 
             chunks = self.processor.chunk_text(text, metadata)
             logger.info(f"📦 Created {len(chunks)} chunks from URL")
@@ -284,162 +325,156 @@ class IngestionPipeline:
                 "document_id": document_id,
                 "chunks_created": len(chunks),
                 "text_length": len(text),
-                "url": url
+                "url": url,
             }
 
         except Exception as e:
             logger.error(f"❌ Error processing URL {url}: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
 
     async def process_document_by_path(self, file_path: str) -> Dict[str, Any]:
         """Process a document by its exact path in Supabase storage"""
         try:
             logger.info(f"🚀 Processing document: {file_path}")
-            
+
             # Download file from Supabase
             response = supabase.storage.from_("Docs").download(file_path)
             if not response:
                 raise Exception(f"Failed to download file: {file_path}")
-            
+
             # Extract filename from path
             file_name = file_path.split("/")[-1] if "/" in file_path else file_path
             logger.info(f"📁 Processing file: {file_name}")
-            
+
             # Extract text
             text = self.processor.extract_text_from_file(response, file_name)
             if not text.strip():
                 raise Exception("No text extracted from document")
-            
+
             logger.info(f"📄 Extracted {len(text)} characters")
-            
+
             # Create metadata
             metadata = {
                 "source": "file",
                 "file_name": file_name,
                 "file_path": file_path,
                 "processed_at": datetime.now().isoformat(),
-                "text_length": len(text)
+                "text_length": len(text),
             }
-            
+
             # Chunk text
             chunks = self.processor.chunk_text(text, metadata)
             logger.info(f"📦 Created {len(chunks)} chunks")
 
             for chunk in chunks:
                 chunk.metadata["chunk_count"] = len(chunks)
-            
+
             # Generate embeddings
             logger.info(f"🧠 Generating embeddings...")
             embeddings_list = await self.processor.generate_embeddings(chunks)
             logger.info(f"✅ Generated {len(embeddings_list)} embeddings")
-            
+
             # Store in Qdrant
             document_id = file_path.replace("/", "_").replace("-", "_")
             logger.info(f"💾 Storing in Qdrant...")
             await self.processor.store_in_qdrant(chunks, embeddings_list, document_id)
-            
+
             logger.info(f"🎉 Successfully processed {file_name}")
             return {
                 "status": "success",
                 "document_id": document_id,
                 "chunks_created": len(chunks),
                 "text_length": len(text),
-                "file_name": file_name
+                "file_name": file_name,
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error processing {file_path}: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
+            return {"status": "error", "error": str(e)}
+
     async def is_document_processed(self, file_path: str) -> bool:
         """Check if a document has already been processed"""
         try:
             # Check if any chunks exist for this document in Qdrant
             document_id = file_path.replace("/", "_").replace("-", "_")
-            
+
             # Search for existing chunks with this document_id
             search_result = qdrant_client.scroll(
                 collection_name=COLLECTION_NAME,
                 scroll_filter={
-                    "must": [
-                        {
-                            "key": "document_id",
-                            "match": {"value": document_id}
-                        }
-                    ]
+                    "must": [{"key": "document_id", "match": {"value": document_id}}]
                 },
-                limit=1
+                limit=1,
             )
-            
+
             return len(search_result[0]) > 0
-            
+
         except Exception as e:
             logger.warning(f"Could not check if document is processed: {e}")
             return False
-    
-    async def process_all_documents(self, force_reprocess: bool = False) -> Dict[str, Any]:
+
+    async def process_all_documents(
+        self, force_reprocess: bool = False
+    ) -> Dict[str, Any]:
         """Process all documents in the bucket, skipping already processed ones"""
         try:
             logger.info("🔄 Starting batch processing of all documents")
-            
+
             # Get all files from Supabase
             all_files = supabase.storage.from_("Docs").list("")
             logger.info(f"📋 Found {len(all_files)} files to process")
-            
+
             results = []
             skipped = 0
-            
+
             for file_info in all_files:
-                file_path = file_info['name']
-                
+                file_path = file_info["name"]
+
                 # Check if already processed (unless force reprocess)
                 if not force_reprocess and await self.is_document_processed(file_path):
                     logger.info(f"⏭️ Skipping already processed: {file_path}")
                     skipped += 1
-                    results.append({
-                        "file_path": file_path,
-                        "result": {"status": "skipped", "message": "Already processed"}
-                    })
+                    results.append(
+                        {
+                            "file_path": file_path,
+                            "result": {
+                                "status": "skipped",
+                                "message": "Already processed",
+                            },
+                        }
+                    )
                     continue
-                
+
                 logger.info(f"🔄 Processing: {file_path}")
                 result = await self.process_document_by_path(file_path)
-                results.append({
-                    "file_path": file_path,
-                    "result": result
-                })
-                
+                results.append({"file_path": file_path, "result": result})
+
                 # Small delay to avoid overwhelming the system
                 await asyncio.sleep(1)
-            
+
             successful = sum(1 for r in results if r["result"]["status"] == "success")
             failed = sum(1 for r in results if r["result"]["status"] == "error")
-            
-            logger.info(f"✅ Batch processing complete: {successful} successful, {failed} failed, {skipped} skipped")
-            
+
+            logger.info(
+                f"✅ Batch processing complete: {successful} successful, {failed} failed, {skipped} skipped"
+            )
+
             return {
                 "status": "completed",
                 "total_files": len(results),
                 "successful": successful,
                 "failed": failed,
                 "skipped": skipped,
-                "results": results
+                "results": results,
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Batch processing error: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    def _update_processing_status(self, file_path: str, status: str, chunks_count: int = 0, error: str = None):
+            return {"status": "error", "error": str(e)}
+
+    def _update_processing_status(
+        self, file_path: str, status: str, chunks_count: int = 0, error: str = None
+    ):
         """Update processing status in Supabase"""
         try:
             # You can create a table to track processing status
@@ -506,6 +541,7 @@ class IngestionPipeline:
         answer = completion.output_text.strip()
         return answer
 
+
 # Initialize pipeline
 pipeline = IngestionPipeline()
 
@@ -521,11 +557,17 @@ else:
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5500"],  # Add your frontend URLs
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5500",
+    ],  # Add your frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 class IngestionSource(BaseModel):
     type: str
@@ -560,6 +602,21 @@ class WidgetChatRequest(BaseModel):
 from typing import Optional
 
 
+def _extract_user_id_from_auth(authorization: str | None) -> str:
+    try:
+        if not authorization or not authorization.startswith("Bearer "):
+            return "anonymous"
+        token = authorization.split(" ", 1)[1]
+        import jwt  # type: ignore
+
+        decoded = jwt.decode(token, options={"verify_signature": False})
+        user_id = decoded.get("sub") or decoded.get("user_id") or decoded.get("id")
+        return str(user_id) if user_id else "anonymous"
+    except Exception as exc:
+        logger.warning(f"Failed to extract user id from auth: {exc}")
+        return "anonymous"
+
+
 def _record_chat_turn(
     *,
     site_id: str,
@@ -586,8 +643,11 @@ def _record_chat_turn(
         logger.warning("Failed to record chat turn: %s", exc, exc_info=True)
         return None
 
+
 @app.post("/process-document")
-async def process_document_endpoint(request: ProcessDocumentRequest, background_tasks: BackgroundTasks):
+async def process_document_endpoint(
+    request: ProcessDocumentRequest, background_tasks: BackgroundTasks
+):
     """Endpoint to process a document"""
     background_tasks.add_task(
         pipeline.process_document_by_path,
@@ -595,10 +655,12 @@ async def process_document_endpoint(request: ProcessDocumentRequest, background_
     )
     return {"message": "Document processing started"}
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
 
 @app.post("/process-all")
 async def process_all_documents(force_reprocess: bool = False):
@@ -610,6 +672,7 @@ async def process_all_documents(force_reprocess: bool = False):
         logger.error(f"Batch processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/process-new-only")
 async def process_new_documents():
     """Process only new documents (skip already processed ones)"""
@@ -619,6 +682,7 @@ async def process_new_documents():
     except Exception as e:
         logger.error(f"New documents processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/process-specific")
 async def process_specific_document(request: ProcessDocumentRequest):
@@ -632,15 +696,28 @@ async def process_specific_document(request: ProcessDocumentRequest):
 
 
 @app.post("/process-url")
-async def process_url_endpoint(request: UrlIngestionRequest):
+async def process_url_endpoint(
+    request: UrlIngestionRequest, authorization: str = Header(None)
+):
     """Process content scraped from a URL and record activity"""
-    await pipeline._record_url_activity_start(request.request_id, request.url, request.metadata)
-    result = await pipeline.process_document_from_url(request.url)
+    # Extract user_id from Supabase JWT token
+    user_id = _extract_user_id_from_auth(authorization)
+
+    await pipeline._record_url_activity_start(
+        request.request_id,
+        request.url,
+        site_id=user_id,
+        user_id=user_id,
+        metadata=request.metadata,
+    )
+    result = await pipeline.process_document_from_url(request.url, user_id)
     if result.get("status") == "error":
         await pipeline._record_url_activity_result(
             request.request_id,
             "error",
             url=request.url,
+            site_id=user_id,
+            user_id=user_id,
             error=result.get("error"),
             metadata=request.metadata,
         )
@@ -650,6 +727,8 @@ async def process_url_endpoint(request: UrlIngestionRequest):
         request.request_id,
         "success",
         url=request.url,
+        site_id=user_id,
+        user_id=user_id,
         chunks_created=result.get("chunks_created"),
         metadata=request.metadata,
     )
@@ -712,7 +791,9 @@ async def widget_chat(request: WidgetChatRequest, authorization: str = Header(No
             temperature=request.temperature or 0.2,
         )
 
-        elapsed_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        elapsed_ms = int(
+            (datetime.now(timezone.utc) - started_at).total_seconds() * 1000
+        )
 
         document_refs = [
             {
@@ -769,7 +850,13 @@ async def list_documents():
 async def list_url_activities(limit: int = 20):
     """Fetch recent URL ingestion activity logs"""
     try:
-        response = supabase.table(URL_ACTIVITY_TABLE).select("*").order("started_at", desc=True).limit(limit).execute()
+        response = (
+            supabase.table(URL_ACTIVITY_TABLE)
+            .select("*")
+            .order("started_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
         activities = response.data if response and hasattr(response, "data") else []
         return {"activities": activities}
     except Exception as e:
@@ -1081,7 +1168,7 @@ async def widget_script():
 
       render();
     }})(); """
-    
+
     return Response(content=script, media_type="application/javascript")
 
 
@@ -1090,27 +1177,36 @@ async def debug_file(file_path: str):
     """Debug endpoint to test file download"""
     try:
         logger.info(f"🔍 Debugging file: {file_path}")
-        
+
         # List all files first
         all_files = supabase.storage.from_("Docs").list("")
         logger.info(f"Available files: {[f['name'] for f in all_files]}")
-        
+
         # Try to download
         try:
             response = supabase.storage.from_("Docs").download(file_path)
             if response:
                 logger.info(f"✅ Successfully downloaded: {file_path}")
-                return {"status": "success", "message": f"File {file_path} downloaded successfully", "size": len(response)}
+                return {
+                    "status": "success",
+                    "message": f"File {file_path} downloaded successfully",
+                    "size": len(response),
+                }
             else:
                 logger.error(f"❌ Download returned None for: {file_path}")
                 return {"status": "error", "message": "Download returned None"}
         except Exception as e:
             logger.error(f"❌ Download failed: {e}")
-            return {"status": "error", "message": str(e), "available_files": [f['name'] for f in all_files]}
-            
+            return {
+                "status": "error",
+                "message": str(e),
+                "available_files": [f["name"] for f in all_files],
+            }
+
     except Exception as e:
         logger.error(f"Debug error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Webhook handler for Supabase storage events
 @app.post("/webhook/storage")
@@ -1119,31 +1215,31 @@ async def storage_webhook(request: dict):
     try:
         logger.info(f"Webhook received: {request}")
         event_type = request.get("type")
-        
+
         if event_type == "INSERT":
             # New file uploaded
             record = request.get("record", {})
             file_path = record.get("name")
             file_name = record.get("name", "").split("/")[-1]
-            
+
             if file_path and file_name:
                 logger.info(f"🚀 New file uploaded: {file_name}")
                 logger.info(f"📁 File path: {file_path}")
                 # Process document in background
-                asyncio.create_task(
-                    pipeline.process_document_by_path(file_path)
-                )
+                asyncio.create_task(pipeline.process_document_by_path(file_path))
             else:
                 logger.warning(f"Invalid webhook data: {request}")
         else:
             logger.info(f"Webhook event type: {event_type} (not processing)")
-        
+
         return {"status": "success"}
-        
+
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

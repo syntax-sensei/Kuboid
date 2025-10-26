@@ -46,7 +46,10 @@ type UrlActivity = {
 };
 
 const DOCS_BUCKET = "Docs";
-const urlActivityStatusStyles: Record<"processing" | "success" | "error", string> = {
+const urlActivityStatusStyles: Record<
+  "processing" | "success" | "error",
+  string
+> = {
   processing: "text-muted-foreground",
   success: "text-emerald-600",
   error: "text-destructive",
@@ -87,7 +90,7 @@ export default function Documents() {
         path: item.name,
       } satisfies StoredDocument;
     },
-    [parseFileName]
+    [parseFileName],
   );
 
   const fetchDocuments = useCallback(async () => {
@@ -119,7 +122,6 @@ export default function Documents() {
   useEffect(() => {
     fetchDocuments();
   }, [fetchDocuments]);
-
   useEffect(() => {
     const loadActivities = async () => {
       try {
@@ -128,15 +130,19 @@ export default function Documents() {
           throw new Error("Failed to load URL activity history");
         }
         const data = await response.json();
-        const parsed: UrlActivity[] = (data.activities ?? []).map((item: any) => ({
-          id: item.id,
-          url: item.url,
-          status: item.status as UrlActivityStatus,
-          startedAt: item.started_at ? new Date(item.started_at) : new Date(),
-          processedAt: item.completed_at ? new Date(item.completed_at) : undefined,
-          chunksCreated: item.chunks_created ?? undefined,
-          error: item.error ?? undefined,
-        }));
+        const parsed: UrlActivity[] = (data.activities ?? []).map(
+          (item: any) => ({
+            id: item.id,
+            url: item.url,
+            status: item.status as UrlActivityStatus,
+            startedAt: item.started_at ? new Date(item.started_at) : new Date(),
+            processedAt: item.completed_at
+              ? new Date(item.completed_at)
+              : undefined,
+            chunksCreated: item.chunks_created ?? undefined,
+            error: item.error ?? undefined,
+          }),
+        );
         setUrlActivities(parsed);
       } catch (error) {
         console.error("Failed to fetch URL activities", error);
@@ -185,11 +191,11 @@ export default function Documents() {
             }
 
             return filePath;
-          })
+          }),
         );
 
         const rejected = uploadResults.filter(
-          (result) => result.status === "rejected"
+          (result) => result.status === "rejected",
         ) as PromiseRejectedResult[];
 
         if (rejected.length > 0) {
@@ -210,29 +216,33 @@ export default function Documents() {
         }
 
         await fetchDocuments();
-        
+
         // Trigger processing of only new documents (no duplicates)
         try {
-          const response = await fetch('http://localhost:8000/process-new-only', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
+          const response = await fetch(
+            "http://localhost:8000/process-new-only",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          );
           const result = await response.json();
-          console.log('Document processing result:', result);
-          
-          if (result.status === 'completed') {
+          console.log("Document processing result:", result);
+
+          if (result.status === "completed") {
             toast({
               title: "Processing Complete",
               description: `Successfully processed ${result.successful} new documents. ${result.failed} failed. ${result.skipped} already processed.`,
             });
           }
         } catch (error) {
-          console.error('Failed to trigger document processing:', error);
+          console.error("Failed to trigger document processing:", error);
           toast({
             title: "Processing Error",
-            description: "Failed to trigger document processing. Please try again.",
+            description:
+              "Failed to trigger document processing. Please try again.",
             variant: "destructive",
           });
         }
@@ -240,13 +250,28 @@ export default function Documents() {
         setIsUploading(false);
       }
     },
-    [fetchDocuments, getUniqueFilePath, toast]
+    [fetchDocuments, getUniqueFilePath, toast],
   );
 
   const handleUrlSubmit = useCallback(
     async (url: string) => {
       const trimmed = url.trim();
       if (!trimmed) return;
+
+      // Get auth token from Supabase session
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      if (!token) {
+        toast({
+          title: "Not signed in",
+          description: "Please sign in to submit URLs.",
+          variant: "destructive",
+        });
+        return;
+      }
 
       toast({
         title: "Scraping started",
@@ -274,6 +299,7 @@ export default function Documents() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
             url: trimmed,
@@ -301,8 +327,8 @@ export default function Documents() {
                   processedAt: new Date(),
                   chunksCreated: result.chunks_created,
                 }
-              : activity
-          )
+              : activity,
+          ),
         );
 
         await fetchDocuments();
@@ -310,7 +336,9 @@ export default function Documents() {
         toast({
           title: "Processing failed",
           description:
-            error instanceof Error ? error.message : "Unexpected error occurred",
+            error instanceof Error
+              ? error.message
+              : "Unexpected error occurred",
           variant: "destructive",
         });
 
@@ -323,8 +351,8 @@ export default function Documents() {
                   processedAt: new Date(),
                   error: error instanceof Error ? error.message : String(error),
                 }
-              : activity
-          )
+              : activity,
+          ),
         );
 
         await fetchDocuments();
@@ -334,22 +362,28 @@ export default function Documents() {
         const refresh = await fetch("http://localhost:8000/url-activities");
         if (refresh.ok) {
           const data = await refresh.json();
-          const parsed: UrlActivity[] = (data.activities ?? []).map((item: any) => ({
-            id: item.id,
-            url: item.url,
-            status: item.status as UrlActivityStatus,
-            startedAt: item.started_at ? new Date(item.started_at) : new Date(),
-            processedAt: item.completed_at ? new Date(item.completed_at) : undefined,
-            chunksCreated: item.chunks_created ?? undefined,
-            error: item.error ?? undefined,
-          }));
+          const parsed: UrlActivity[] = (data.activities ?? []).map(
+            (item: any) => ({
+              id: item.id,
+              url: item.url,
+              status: item.status as UrlActivityStatus,
+              startedAt: item.started_at
+                ? new Date(item.started_at)
+                : new Date(),
+              processedAt: item.completed_at
+                ? new Date(item.completed_at)
+                : undefined,
+              chunksCreated: item.chunks_created ?? undefined,
+              error: item.error ?? undefined,
+            }),
+          );
           setUrlActivities(parsed);
         }
       } catch (refreshError) {
         console.error("Failed to refresh URL activities", refreshError);
       }
     },
-    [fetchDocuments, toast]
+    [fetchDocuments, toast],
   );
 
   const handleViewDocument = useCallback(
@@ -375,7 +409,7 @@ export default function Documents() {
         setIsPreviewLoading(false);
       }
     },
-    [createSignedUrl, toast]
+    [createSignedUrl, toast],
   );
 
   const handleDownloadDocument = useCallback(
@@ -401,7 +435,7 @@ export default function Documents() {
         });
       }
     },
-    [createSignedUrl, toast]
+    [createSignedUrl, toast],
   );
 
   const handlePreviewOpenChange = useCallback((open: boolean) => {
@@ -432,7 +466,7 @@ export default function Documents() {
       try {
         console.log("Attempting to delete document:", doc);
         console.log("Document path:", doc.path);
-        
+
         const { data, error } = await supabase.storage
           .from(DOCS_BUCKET)
           .remove([doc.path]);
@@ -459,44 +493,56 @@ export default function Documents() {
           console.log("Verification check:", { urlData, urlError });
 
           if (!urlError && urlData?.signedUrl) {
-            console.error("File still exists after deletion attempt - signed URL created successfully");
+            console.error(
+              "File still exists after deletion attempt - signed URL created successfully",
+            );
             toast({
               title: "Delete failed",
-              description: "The file could not be deleted. Please check your Supabase storage permissions.",
+              description:
+                "The file could not be deleted. Please check your Supabase storage permissions.",
               variant: "destructive",
             });
             return false;
           } else {
-            console.log("File successfully deleted - signed URL creation failed as expected");
+            console.log(
+              "File successfully deleted - signed URL creation failed as expected",
+            );
           }
         } catch (verifyError) {
-          console.log("Verification error (expected if file is deleted):", verifyError);
+          console.log(
+            "Verification error (expected if file is deleted):",
+            verifyError,
+          );
           // This is expected if the file was actually deleted
         }
 
         // Refresh the document list to verify deletion
-        const { data: freshData, error: freshError } = await supabase.storage.from(DOCS_BUCKET).list("", {
-          limit: 100,
-          sortBy: { column: "created_at", order: "desc" },
-        });
+        const { data: freshData, error: freshError } = await supabase.storage
+          .from(DOCS_BUCKET)
+          .list("", {
+            limit: 100,
+            sortBy: { column: "created_at", order: "desc" },
+          });
 
         if (freshError) {
           console.error("Could not verify deletion:", freshError);
           toast({
             title: "Delete may have failed",
-            description: "Could not verify if the file was deleted. Please refresh the page to check.",
+            description:
+              "Could not verify if the file was deleted. Please refresh the page to check.",
             variant: "destructive",
           });
           return false;
         }
 
         // Check if the file still exists in the fresh list
-        const stillExists = freshData?.some(item => item.name === doc.path);
+        const stillExists = freshData?.some((item) => item.name === doc.path);
         if (stillExists) {
           console.error("File still exists after deletion attempt");
           toast({
             title: "Delete failed",
-            description: "The file could not be deleted. Please check your Supabase storage permissions.",
+            description:
+              "The file could not be deleted. Please check your Supabase storage permissions.",
             variant: "destructive",
           });
           return false;
@@ -519,7 +565,7 @@ export default function Documents() {
         return false;
       }
     },
-    [fetchDocuments, toast]
+    [fetchDocuments, toast],
   );
 
   const handleConfirmDelete = useCallback(async () => {
@@ -540,12 +586,12 @@ export default function Documents() {
         setDeleteTarget(null);
       }
     },
-    [isDeleting]
+    [isDeleting],
   );
 
   const isEmpty = useMemo(
     () => !isLoading && documents.length === 0,
-    [documents.length, isLoading]
+    [documents.length, isLoading],
   );
 
   return (
@@ -577,7 +623,9 @@ export default function Documents() {
                   </div>
                   <div>
                     <p className="font-medium break-all">{activity.url}</p>
-                    <p className={`text-sm ${urlActivityStatusStyles[activity.status]}`}>
+                    <p
+                      className={`text-sm ${urlActivityStatusStyles[activity.status]}`}
+                    >
                       {activity.status === "processing" && "Processing…"}
                       {activity.status === "success" &&
                         `Processed • ${activity.chunksCreated ?? 0} chunks`}
