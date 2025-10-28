@@ -6,8 +6,13 @@ from dotenv import load_dotenv
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+# Load root .env first (if present) then client/.env so either can override
+ROOT_ENV = BASE_DIR / ".env"
 ENV_PATH = BASE_DIR / "client" / ".env"
-load_dotenv(ENV_PATH)
+if ROOT_ENV.exists():
+    load_dotenv(ROOT_ENV)
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
 
 class Config:
     # Supabase
@@ -16,6 +21,7 @@ class Config:
     
     # Qdrant
     QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
     
     # OpenAI
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

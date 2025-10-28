@@ -18,7 +18,7 @@ import pandas as pd
 import trafilatura
 
 # LangChain imports
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain.schema import Document as LangChainDocument
 
@@ -56,7 +56,12 @@ logger = logging.getLogger(__name__)
 
 # Initialize clients using config
 supabase: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_SERVICE_ROLE_KEY)
-qdrant_client = QdrantClient(url=Config.QDRANT_URL)
+# Initialize Qdrant client with optional API key (for Qdrant Cloud or secured instances)
+try:
+    qdrant_client = QdrantClient(url=Config.QDRANT_URL, api_key=getattr(Config, "QDRANT_API_KEY", None))
+except Exception:
+    # Fallback to basic initialization if something unexpected happens
+    qdrant_client = QdrantClient(url=Config.QDRANT_URL)
 embeddings = OpenAIEmbeddings(
     openai_api_key=Config.OPENAI_API_KEY, model="text-embedding-3-large"
 )
