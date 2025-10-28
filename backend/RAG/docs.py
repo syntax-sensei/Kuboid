@@ -46,8 +46,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-# Import config
-from config import Config
+# Import config (try relative/package/absolute imports to be robust whether run as module or script)
+try:
+    # Preferred: relative import when running as a package (uvicorn backend.RAG.docs:app)
+    from .config import Config
+except Exception:
+    try:
+        # Try package-style import
+        from RAG.config import Config
+    except Exception:
+        # Fallback: add current directory to sys.path and import by module name
+        current_dir = Path(__file__).resolve().parent
+        if str(current_dir) not in sys.path:
+            sys.path.insert(0, str(current_dir))
+        from config import Config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
