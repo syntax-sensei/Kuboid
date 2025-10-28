@@ -17,3 +17,5 @@ pydantic
 openai
 trafilatura
 langchain-text-splitters
+langchain-openai
+langchain-qdrant
