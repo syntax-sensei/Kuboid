@@ -18,7 +18,7 @@ export default function Widget() {
     siteId: "demo-site",
     topK: 5,
     temperature: 0.2,
-    apiBase: "http://localhost:8000",
+    apiBase: import.meta.env.VITE_API_URL,
   });
 
   const [copied, setCopied] = useState(false);

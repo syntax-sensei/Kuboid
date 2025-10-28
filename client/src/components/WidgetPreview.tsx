@@ -34,7 +34,7 @@ export function WidgetPreview({
   placeholder,
   showBranding,
   siteId,
-  apiBase = "http://localhost:8000",
+  apiBase = import.meta.env.VITE_API_URL,
   topK = 5,
   temperature = 0.2,
 }: WidgetPreviewProps) {

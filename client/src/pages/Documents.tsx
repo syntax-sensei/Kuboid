@@ -57,6 +57,7 @@ const urlActivityStatusStyles: Record<
 };
 
 export default function Documents() {
+  const API_BASE = import.meta.env.VITE_API_URL;
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -153,7 +154,7 @@ export default function Documents() {
         } = await supabase.auth.getSession();
         const token = session?.access_token;
 
-        const response = await fetch("http://localhost:8000/url-activities", {
+        const response = await fetch(`${API_BASE}/url-activities`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
         if (!response.ok) {
@@ -257,7 +258,7 @@ export default function Documents() {
         try {
           // include the user's auth token so backend can process only files in their folder
           const token = session?.access_token;
-          const response = await fetch("http://localhost:8000/process-new-only", {
+          const response = await fetch(`${API_BASE}/process-new-only`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -331,7 +332,7 @@ export default function Documents() {
       ]);
 
       try {
-        const response = await fetch("http://localhost:8000/process-url", {
+        const response = await fetch(`${API_BASE}/process-url`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -401,7 +402,7 @@ export default function Documents() {
         } = await supabase.auth.getSession();
         const token = session?.access_token;
 
-        const refresh = await fetch("http://localhost:8000/url-activities", {
+        const refresh = await fetch(`${API_BASE}/url-activities`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
         if (refresh.ok) {
