@@ -62,55 +62,6 @@ export default function Widget() {
             </CardHeader>
             <CardContent>
               <WidgetCustomizer config={config} onChange={setConfig} />
-              <div className="mt-6 space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Site ID</label>
-                    <Input
-                      value={config.siteId}
-                      onChange={(e) => setConfig((prev) => ({ ...prev, siteId: e.target.value }))
-                      }
-                      data-testid="input-site-id"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">API Base URL</label>
-                    <Input
-                      value={config.apiBase}
-                      onChange={(e) => setConfig((prev) => ({ ...prev, apiBase: e.target.value }))
-                      }
-                      data-testid="input-api-base"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Top K results</label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={config.topK}
-                      onChange={(e) => setConfig((prev) => ({ ...prev, topK: Number(e.target.value) }))
-                      }
-                      data-testid="input-topk"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Temperature</label>
-                    <Input
-                      type="number"
-                      step={0.1}
-                      min={0}
-                      max={1}
-                      value={config.temperature}
-                      onChange={(e) => setConfig((prev) => ({ ...prev, temperature: Number(e.target.value) }))
-                      }
-                      data-testid="input-temperature"
-                    />
-                  </div>
-                </div>
-              </div>
             </CardContent>
           </Card>
 

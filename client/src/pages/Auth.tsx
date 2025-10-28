@@ -57,7 +57,7 @@ export default function Auth() {
       }
 
       if (shouldRedirect) {
-        setLocation("/dashboard");
+        setLocation("/documents");
       }
     } catch (error) {
       const message =
@@ -82,7 +82,7 @@ export default function Auth() {
   }
 
   if (session) {
-    return <Redirect to="/dashboard" />;
+    return <Redirect to="/documents" />;
   }
 
   return (

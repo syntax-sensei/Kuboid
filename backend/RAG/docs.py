@@ -414,21 +414,47 @@ class IngestionPipeline:
             return False
 
     async def process_all_documents(
-        self, force_reprocess: bool = False
+        self, force_reprocess: bool = False, user_id: str | None = None
     ) -> Dict[str, Any]:
-        """Process all documents in the bucket, skipping already processed ones"""
+        """Process documents in the bucket. If user_id is provided, only process files in that user's folder.
+        Skips already processed ones when force_reprocess is False.
+        """
         try:
             logger.info("🔄 Starting batch processing of all documents")
 
-            # Get all files from Supabase
-            all_files = supabase.storage.from_("Docs").list("")
-            logger.info(f"📋 Found {len(all_files)} files to process")
+            # Determine the path to list. If user_id is provided, list inside that user's folder.
+            list_path = user_id or ""
+
+            # Get all files from Supabase under list_path
+            all_files = supabase.storage.from_("Docs").list(list_path)
+
+            # Supabase may return folder entries (directories) as list items without an 'id'.
+            # Also Supabase may include a placeholder file named '.emptyFolderPlaceholder' when a folder
+            # is empty — skip those as they are not real documents.
+            file_items = [
+                f
+                for f in (all_files or [])
+                if f.get("id") and not (f.get("name") or "").endswith(".emptyFolderPlaceholder")
+            ]
+            logger.info(
+                f"📋 Found {len(all_files or [])} items at '{list_path}', {len(file_items)} files to process (placeholders skipped)"
+            )
 
             results = []
             skipped = 0
 
-            for file_info in all_files:
-                file_path = file_info["name"]
+            for file_info in file_items:
+                # file_info['name'] may be returned as a basename when listing a folder.
+                # Ensure we construct the full path relative to the bucket. If we listed a user folder
+                # (list_path != ""), prefix the filename with the folder name when needed.
+                raw_name = file_info.get("name") or ""
+                if list_path:
+                    if raw_name.startswith(list_path + "/") or raw_name == list_path:
+                        file_path = raw_name
+                    else:
+                        file_path = f"{list_path.rstrip('/')}/{raw_name.lstrip('/')}"
+                else:
+                    file_path = raw_name
 
                 # Check if already processed (unless force reprocess)
                 if not force_reprocess and await self.is_document_processed(file_path):
@@ -674,11 +700,18 @@ async def process_all_documents(force_reprocess: bool = False):
 
 
 @app.post("/process-new-only")
-async def process_new_documents():
-    """Process only new documents (skip already processed ones)"""
+async def process_new_documents(authorization: str = Header(None)):
+    """Process only new documents for the authenticated user (skip already processed ones)"""
     try:
-        result = await pipeline.process_all_documents(force_reprocess=False)
+        # Require authorization to ensure we only process files for the requesting user
+        user_id = _extract_user_id_from_auth(authorization)
+        if not authorization or not user_id or user_id == "anonymous":
+            raise HTTPException(status_code=401, detail="Missing or invalid authorization token")
+
+        result = await pipeline.process_all_documents(force_reprocess=False, user_id=user_id)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"New documents processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -847,9 +880,16 @@ async def list_documents():
 
 
 @app.get("/url-activities")
-async def list_url_activities(limit: int = 20):
+async def list_url_activities(limit: int = 20, authorization: str = Header(None)):
     """Fetch recent URL ingestion activity logs"""
     try:
+        # Extract user id from Authorization header and only return that user's activities
+        user_id = _extract_user_id_from_auth(authorization)
+
+        # Diagnostic logging to help debug why users may see no activities
+        logger.info("/url-activities requested by user_id=%s", user_id)
+
+        # Fetch recent activities and filter in Python to avoid DB JSON filtering quirks
         response = (
             supabase.table(URL_ACTIVITY_TABLE)
             .select("*")
@@ -857,8 +897,39 @@ async def list_url_activities(limit: int = 20):
             .limit(limit)
             .execute()
         )
+
         activities = response.data if response and hasattr(response, "data") else []
-        return {"activities": activities}
+        logger.info("/url-activities fetched %d activities (before filtering)", len(activities))
+        try:
+            logger.info("/url-activities sample metadata: %s", [a.get("metadata") for a in activities[:3]])
+        except Exception:
+            pass
+
+        def _belongs_to_user(activity: dict, uid: str) -> bool:
+            # Check top-level fields first
+            if not activity:
+                return False
+            if activity.get("user_id") == uid or activity.get("site_id") == uid:
+                return True
+
+            # Check metadata (may be None or json)
+            meta = activity.get("metadata") or {}
+            try:
+                if isinstance(meta, str):
+                    import json
+
+                    meta = json.loads(meta)
+            except Exception:
+                meta = {}
+
+            if isinstance(meta, dict):
+                if str(meta.get("user_id")) == str(uid) or str(meta.get("site_id")) == str(uid):
+                    return True
+
+            return False
+
+        filtered = [a for a in activities if _belongs_to_user(a, user_id)]
+        return {"activities": filtered}
     except Exception as e:
         logger.error(f"Error fetching URL activities: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

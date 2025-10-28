@@ -47,9 +47,10 @@ class AnalyticsService:
             .limit(10)
             .execute()
         )
+        # Include metadata so frontend can display tags and variants when available
         common_issues_resp = (
             self.supabase.table("analytics_common_issues")
-            .select("query,count,trend")
+            .select("query,count,trend,metadata")
             .order("count", desc=True)
             .limit(20)
             .execute()

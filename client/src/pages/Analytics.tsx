@@ -195,20 +195,25 @@ export default function Analytics() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <AnalyticsChart
-          title="Queries Over Time"
-          data={weeklyData}
-          type="line"
-          loading={isLoading}
-        />
-        <AnalyticsChart
-          title="Top Query Topics"
-          data={topQueries}
-          type="bar"
-          loading={isLoading}
-        />
-      </div>
+      {/* Only render charts when there is data to show; otherwise hide to avoid empty placeholders */}
+      {(weeklyData.length > 0 || topQueries.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {weeklyData.length > 0 && (
+            <AnalyticsChart
+              title="Queries Over Time"
+              data={weeklyData}
+              type="line"
+            />
+          )}
+          {topQueries.length > 0 && (
+            <AnalyticsChart
+              title="Top Query Topics"
+              data={topQueries}
+              type="bar"
+            />
+          )}
+        </div>
+      )}
 
       <Card>
         <CardHeader>

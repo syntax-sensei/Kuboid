@@ -26,11 +26,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 
 const menuItems = [
-  {
+  /*{
     title: "Dashboard",
     url: "/dashboard",
     icon: LayoutDashboard,
-  },
+  },*/
   {
     title: "Documents",
     url: "/documents",
@@ -46,11 +46,11 @@ const menuItems = [
     url: "/analytics",
     icon: BarChart3,
   },
-  {
+  /*{
     title: "Integrations",
     url: "/integrations",
     icon: PlugZap,
-  },
+  },*/
 ];
 
 export function AppSidebar() {

@@ -29,6 +29,7 @@ type StoredDocument = {
   id: string;
   name: string;
   fileType?: string;
+  type: "file" | "url";
   uploadedAt: Date;
   path: string;
 };
@@ -69,9 +70,11 @@ export default function Documents() {
   const { toast } = useToast();
 
   const parseFileName = useCallback((storedName: string) => {
-    const separatorIndex = storedName.indexOf("-");
-    if (separatorIndex === -1) return storedName;
-    return storedName.slice(separatorIndex + 1);
+    // If the file is stored under a user folder, get the basename first
+    const base = storedName.includes("/") ? storedName.split("/").pop() || storedName : storedName;
+    const separatorIndex = base.indexOf("-");
+    if (separatorIndex === -1) return base;
+    return base.slice(separatorIndex + 1);
   }, []);
 
   const toStoredDocument = useCallback(
@@ -95,7 +98,15 @@ export default function Documents() {
 
   const fetchDocuments = useCallback(async () => {
     setIsLoading(true);
-    const { data, error } = await supabase.storage.from(DOCS_BUCKET).list("", {
+    // List documents from the current user's folder so users see their own files
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+
+    const listPath = userId || "";
+
+    const { data, error } = await supabase.storage.from(DOCS_BUCKET).list(listPath, {
       limit: 100,
       sortBy: { column: "created_at", order: "desc" },
     });
@@ -111,8 +122,19 @@ export default function Documents() {
     }
 
     const files = (data ?? [])
-      .filter((item) => item.id)
-      .map(toStoredDocument)
+      .filter((item) => {
+        // filter out Supabase empty folder placeholder files (they appear when a folder is empty)
+        const baseName = item.name?.includes("/") ? item.name.split("/").pop() : item.name;
+        if (baseName === ".emptyFolderPlaceholder") return false;
+        return !!item.id;
+      })
+      .map((item) => {
+        // When listing inside a user folder Supabase may return item.name as the basename.
+        // Ensure the stored path includes the user folder so operations (download/delete) target the right object.
+        const doc = toStoredDocument(item);
+        const fullPath = listPath ? `${listPath.replace(/\/$/, "")}/${item.name}` : item.name;
+        return { ...doc, path: fullPath } as StoredDocument;
+      })
       .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime());
 
     setDocuments(files);
@@ -125,7 +147,15 @@ export default function Documents() {
   useEffect(() => {
     const loadActivities = async () => {
       try {
-        const response = await fetch("http://localhost:8000/url-activities");
+        // include auth token so backend can filter activities by user
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
+        const response = await fetch("http://localhost:8000/url-activities", {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!response.ok) {
           throw new Error("Failed to load URL activity history");
         }
@@ -179,9 +209,15 @@ export default function Documents() {
 
       setIsUploading(true);
       try {
+        // namespace uploads under the user's folder
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const userId = session?.user?.id ?? "anonymous";
+
         const uploadResults = await Promise.allSettled(
           files.map(async (file) => {
-            const filePath = getUniqueFilePath(file.name);
+            const filePath = `${userId}/${getUniqueFilePath(file.name)}`;
             const { error } = await supabase.storage
               .from(DOCS_BUCKET)
               .upload(filePath, file, { upsert: false });
@@ -219,15 +255,15 @@ export default function Documents() {
 
         // Trigger processing of only new documents (no duplicates)
         try {
-          const response = await fetch(
-            "http://localhost:8000/process-new-only",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
+          // include the user's auth token so backend can process only files in their folder
+          const token = session?.access_token;
+          const response = await fetch("http://localhost:8000/process-new-only", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
-          );
+          });
           const result = await response.json();
           console.log("Document processing result:", result);
 
@@ -359,7 +395,15 @@ export default function Documents() {
       }
 
       try {
-        const refresh = await fetch("http://localhost:8000/url-activities");
+        // include auth token when refreshing activities
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
+        const refresh = await fetch("http://localhost:8000/url-activities", {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (refresh.ok) {
           const data = await refresh.json();
           const parsed: UrlActivity[] = (data.activities ?? []).map(
@@ -517,9 +561,11 @@ export default function Documents() {
         }
 
         // Refresh the document list to verify deletion
+        // List the folder where the file lived to verify deletion
+        const folder = doc.path.includes("/") ? doc.path.split("/")[0] : "";
         const { data: freshData, error: freshError } = await supabase.storage
           .from(DOCS_BUCKET)
-          .list("", {
+          .list(folder, {
             limit: 100,
             sortBy: { column: "created_at", order: "desc" },
           });
