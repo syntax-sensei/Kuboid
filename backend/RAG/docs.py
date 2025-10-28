@@ -20,7 +20,7 @@ import trafilatura
 # LangChain imports
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain.schema import Document as LangChainDocument
+from langchain_core.documents import Document as LangChainDocument
 
 # Qdrant imports
 from qdrant_client import QdrantClient
