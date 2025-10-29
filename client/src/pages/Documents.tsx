@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { API_BASE } from "@/lib/api";
 
 type StoredDocument = {
   id: string;
@@ -57,7 +58,7 @@ const urlActivityStatusStyles: Record<
 };
 
 export default function Documents() {
-  const API_BASE = import.meta.env.VITE_API_URL;
+  
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);

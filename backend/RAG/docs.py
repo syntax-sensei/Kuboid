@@ -598,14 +598,19 @@ else:
     logger.warning("Analytics routes disabled (module not available)")
 
 # Add CORS middleware
+# Validate required config (this will raise on startup if required env vars are missing)
+Config.validate()
+
+# Load CORS origins from environment variable `CORS_ORIGINS` (comma-separated, no fallback)
+cors_env = Config.CORS_ORIGINS
+if not cors_env:
+    raise RuntimeError("CORS_ORIGINS environment variable is required and must contain a comma-separated list of origins")
+
+allow_origins = [origin.strip() for origin in cors_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5500",
-    ],  # Add your frontend URLs
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

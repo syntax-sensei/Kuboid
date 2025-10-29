@@ -69,6 +69,16 @@ class AnalyticsService:
                 updated_at=None,
             )
 
+        # Compute live knowledge_gaps count from the knowledge_gaps table to avoid stale summary values
+        try:
+            gaps_count_resp = self.supabase.table(KNOWLEDGE_GAPS_TABLE).select("id", count="exact").execute()
+            gaps_count = int(gaps_count_resp.count or 0)
+            # Override summary value with live count
+            summary.knowledge_gaps = gaps_count
+        except Exception:
+            # If counting fails, leave whatever summary value we have
+            pass
+
         return AnalyticsOverviewResponse(
             summary=summary,
             weekly_trend=weekly_resp.data or [],

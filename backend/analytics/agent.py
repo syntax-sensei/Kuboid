@@ -203,7 +203,10 @@ class AnalyticsAgent:
                     "canonical_question": question,
                     "total_count": count,
                     "trend": "neutral",
-                    "variants": [],
+                    # Provide a sensible fallback so metadata isn't empty: include the
+                    # original question as a single variant. This ensures frontend
+                    # shows something useful even when LLM clustering isn't available.
+                    "variants": [question],
                     "tags": [],
                 }
                 for question, count in (top_items if limit is None else top_items[:limit])
@@ -260,7 +263,9 @@ class AnalyticsAgent:
                     "canonical_question": question,
                     "total_count": count,
                     "trend": "neutral",
-                    "variants": [],
+                    # Use the original question as a fallback variant so metadata
+                    # contains useful information even without LLM output.
+                    "variants": [question],
                     "tags": [],
                 }
                 for question, count in (

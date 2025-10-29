@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Any
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,8 @@ class GapInsight(BaseModel):
     missing: List[str]
     recent_attempts: int
     last_seen: datetime
+    status: Optional[str] = None
+    metadata: Dict[str, Any] | None = None
 
 
 class AnalyticsSummary(BaseModel):

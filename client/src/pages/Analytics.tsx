@@ -14,6 +14,10 @@ import {
 import { StatCard } from "@/components/StatCard";
 import { AnalyticsChart } from "@/components/AnalyticsChart";
 import { Button } from "@/components/ui/button";
+import { DocumentUpload } from "@/components/DocumentUpload";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabaseClient";
 import {
   Table,
   TableBody,
@@ -23,8 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "@/lib/api";
 
  type SummaryState = {
   total_queries: number;
@@ -66,6 +69,11 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 export default function Analytics() {
   const [overview, setOverview] = useState<OverViewData | null>(null);
   const [gaps, setGaps] = useState<GapItem[]>([]);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [activeGapTopic, setActiveGapTopic] = useState<string | null>(null);
+  const [isLinking, setIsLinking] = useState(false);
+  const [gapFilter, setGapFilter] = useState<'all' | 'open' | 'resolved'>('open');
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,6 +115,138 @@ export default function Analytics() {
     const interval = setInterval(load, 60_000);
     return () => clearInterval(interval);
   }, [fetchOverview, fetchGaps]);
+
+  // Mark a gap as resolved (client -> analytics actions endpoint)
+  const handleMarkResolved = async (gapTopic: string) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const response = await fetch(`${API_BASE}/analytics/knowledge-gaps/actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ gap_topic: gapTopic, action: "mark_resolved", metadata: {} }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Failed to mark gap as resolved");
+      }
+
+    toast({ title: "Gap updated", description: `Marked "${gapTopic}" as resolved.` });
+    // optimistic UI: set gap status locally so filter behaves correctly
+    setGaps((prev) => prev.map((g) => (g.topic === gapTopic ? { ...g, status: 'resolved' } : g)));
+    // refresh gaps list in background
+    fetchGaps();
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+    }
+  };
+
+  // Upload files for a gap (upload to Supabase, trigger processing, and notify analytics)
+  const handleFileUploadForGap = async (files: File[]) => {
+    if (!activeGapTopic) return;
+    setIsLinking(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id ?? "anonymous";
+      const token = session?.access_token;
+
+      const getUniqueFilePath = (fileName: string) => {
+        const safeName = fileName.replace(/\s+/g, "-");
+        const uniquePrefix = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10);
+        return `${userId}/${uniquePrefix}-${safeName}`;
+      };
+
+      const uploadResults = await Promise.all(files.map(async (file) => {
+        const filePath = getUniqueFilePath(file.name);
+        const { error } = await supabase.storage.from("Docs").upload(filePath, file, { upsert: false });
+        if (error) throw error;
+        return filePath;
+      }));
+
+      toast({ title: "Upload complete", description: `Uploaded ${uploadResults.length} file(s). Processing started.` });
+
+      // trigger processing for new files (server will process only user's folder)
+      await fetch(`${API_BASE}/process-new-only`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      // Notify analytics to link the documents to the gap
+      const notify = await fetch(`${API_BASE}/analytics/knowledge-gaps/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ gap_topic: activeGapTopic, action: "link_source", metadata: { documents: uploadResults } }),
+      });
+
+      if (!notify.ok) {
+        const err = await notify.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Failed to notify analytics about linked sources");
+      }
+
+  toast({ title: "Linked", description: `Linked ${uploadResults.length} document(s) to "${activeGapTopic}".` });
+      setLinkDialogOpen(false);
+      setActiveGapTopic(null);
+      await fetchGaps();
+    } catch (err) {
+      toast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
+  // Submit URL for a gap (scrape & process, then notify analytics)
+  const handleUrlSubmitForGap = async (url: string) => {
+    if (!activeGapTopic) return;
+    setIsLinking(true);
+    try {
+      const trimmed = url.trim();
+      if (!trimmed) return;
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+  toast({ title: "Scraping started", description: "We'll notify you once it's processed." });
+
+      const activityId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10);
+
+      const response = await fetch(`${API_BASE}/process-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ url: trimmed, request_id: activityId }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail ?? "Failed to process URL");
+
+      // Notify analytics
+      const notify = await fetch(`${API_BASE}/analytics/knowledge-gaps/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ gap_topic: activeGapTopic, action: "link_source", metadata: { urls: [trimmed], chunks_created: result.chunks_created } }),
+      });
+
+      if (!notify.ok) {
+        const err = await notify.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Failed to notify analytics about linked URL");
+      }
+
+  toast({ title: "Linked", description: `Linked URL to "${activeGapTopic}".` });
+      setLinkDialogOpen(false);
+      setActiveGapTopic(null);
+      await fetchGaps();
+    } catch (err) {
+      toast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setIsLinking(false);
+    }
+  };
 
   const summary = overview?.summary;
   const summaryTiles = useMemo(
@@ -173,6 +313,13 @@ export default function Analytics() {
     () => (overview?.common_issues ?? []).filter((issue) => issue.count > 3),
     [overview]
   );
+
+  const visibleGaps = useMemo(() => {
+    const list = gaps ?? [];
+    if (gapFilter === 'all') return list;
+    if (gapFilter === 'open') return list.filter((g) => (g.status ?? 'open') !== 'resolved');
+    return list.filter((g) => (g.status ?? '').toLowerCase() === 'resolved');
+  }, [gaps, gapFilter]);
 
   return (
     <div className="p-6 space-y-6">
@@ -305,18 +452,25 @@ export default function Analytics() {
                 Review where the assistant struggled and surface the missing context to prioritize fixes.
               </p>
             </div>
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-              <Info className="h-4 w-4" />
-              <span>Gap rate = unanswered sessions / total attempts</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                <Info className="h-4 w-4" />
+                <span>Gap rate = unanswered sessions / total attempts</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant={gapFilter === 'all' ? 'default' : 'ghost'} onClick={() => setGapFilter('all')}>All</Button>
+                <Button size="sm" variant={gapFilter === 'open' ? 'default' : 'ghost'} onClick={() => setGapFilter('open')}>Open only</Button>
+                <Button size="sm" variant={gapFilter === 'resolved' ? 'default' : 'ghost'} onClick={() => setGapFilter('resolved')}>Resolved</Button>
+              </div>
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4">
-            {gaps.length === 0 && !isLoading ? (
+            {visibleGaps.length === 0 && !isLoading ? (
               <div className="text-muted-foreground text-sm">No knowledge gaps identified yet.</div>
             ) : (
-              gaps.map((gap) => (
+              visibleGaps.map((gap) => (
                 <div key={gap.topic} className="rounded-lg border border-border/60 bg-background p-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
@@ -328,6 +482,19 @@ export default function Analytics() {
                         <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
                           {gap.recent_attempts} recent attempts
                         </span>
+                        {gap.status && (
+                          <span
+                            className={`ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                              gap.status === 'resolved'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : gap.status === 'linked'
+                                ? 'bg-primary/10 text-primary'
+                                : 'bg-muted text-muted-foreground'
+                            }`}
+                          >
+                            {gap.status}
+                          </span>
+                        )}
                       </div>
                       {gap.why && <p className="mt-2 text-sm text-muted-foreground">{gap.why}</p>}
                     </div>
@@ -350,10 +517,21 @@ export default function Analytics() {
                         Add the missing details to the knowledge base or upload supporting documents via the Integrations tab.
                       </p>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Button variant="secondary" size="sm" onClick={() => console.log("link", gap.topic)}>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setActiveGapTopic(gap.topic);
+                            setLinkDialogOpen(true);
+                          }}
+                        >
                           Link source
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => console.log("resolve", gap.topic)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleMarkResolved(gap.topic)}
+                        >
                           Mark as resolved
                         </Button>
                       </div>
@@ -365,6 +543,34 @@ export default function Analytics() {
           </div>
         </CardContent>
       </Card>
+      <Dialog open={linkDialogOpen} onOpenChange={(open) => { if (!open) { setActiveGapTopic(null); } setLinkDialogOpen(open); }}>
+        <DialogContent className="w-full max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Link source for: {activeGapTopic}</DialogTitle>
+            <DialogDescription>
+              Upload a document or provide a URL to add supporting context for this topic. Uploaded documents will be processed and linked automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-4">
+            <DocumentUpload
+              onFileUpload={(files) => handleFileUploadForGap(files as unknown as File[])}
+              onUrlSubmit={(url) => handleUrlSubmitForGap(url)}
+            />
+          </div>
+
+          <DialogFooter>
+            <div className="flex items-center justify-between w-full">
+              <div className="text-sm text-muted-foreground">{isLinking ? "Processing…" : ""}</div>
+              <div>
+                <Button variant="ghost" onClick={() => { setLinkDialogOpen(false); setActiveGapTopic(null); }}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

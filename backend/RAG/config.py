@@ -31,6 +31,8 @@ class Config:
 
     # Frontend
     WIDGET_SCRIPT_BASE_URL = os.getenv("WIDGET_SCRIPT_BASE_URL", "http://localhost:8000")
+    # CORS - comma separated list of allowed origins (no fallback)
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS")
     
     # Processing
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
@@ -45,7 +47,8 @@ class Config:
         required_vars = [
             "SUPABASE_URL",
             "SUPABASE_SERVICE_ROLE_KEY", 
-            "OPENAI_API_KEY"
+            "OPENAI_API_KEY",
+            "CORS_ORIGINS",
         ]
 
         if not cls.EMBED_SECRET:

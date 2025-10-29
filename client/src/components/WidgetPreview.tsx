@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { API_BASE } from "@/lib/api";
 import { MessageCircle, X, Send, Loader2, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +35,7 @@ export function WidgetPreview({
   placeholder,
   showBranding,
   siteId,
-  apiBase = import.meta.env.VITE_API_URL,
+  apiBase = API_BASE,
   topK = 5,
   temperature = 0.2,
 }: WidgetPreviewProps) {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE } from "@/lib/api";
 import { WidgetCustomizer, type WidgetConfig } from "@/components/WidgetCustomizer";
 import { WidgetPreview } from "@/components/WidgetPreview";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ export default function Widget() {
     siteId: "demo-site",
     topK: 5,
     temperature: 0.2,
-    apiBase: import.meta.env.VITE_API_URL,
+  apiBase: API_BASE,
   });
 
   const [copied, setCopied] = useState(false);
