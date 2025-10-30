@@ -11,7 +11,7 @@ export type WidgetConfig = {
   welcomeMessage: string;
   placeholder: string;
   showBranding: boolean;
-  siteId: string;
+  siteId?: string;
   topK: number;
   temperature: number;
   apiBase: string;
@@ -118,15 +118,7 @@ export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="site-id">Site ID</Label>
-              <Input
-                id="site-id"
-                value={config.siteId}
-                onChange={(e) => updateConfig("siteId", e.target.value)}
-                data-testid="input-customizer-site-id"
-              />
-            </div>
+          {/* Site ID is now managed server-side; removed from UI */}
             <div className="space-y-2">
               <Label htmlFor="api-base">API Base URL</Label>
               <Input

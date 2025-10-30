@@ -1,24 +1,20 @@
+<!doctype html>
 <html>
-    <body>
-        <!-- SupportBot Widget -->
+  <head>
+    <meta charset="utf-8" />
+    <title>Widget demo</title>
+  </head>
+  <body>
+    <h1>Widget demo page</h1>
+
+    <!-- SupportBot Widget -->
+    <!-- SupportBot Widget -->
 <script>
-    (function() {
-      window.supportBotConfig = {
-    "primaryColor": "#3b83f7",
-    "backgroundColor": "#FFFFFF",
-    "position": "bottom-right",
-    "welcomeMessage": "Hello! How can I help you today?",
-    "placeholder": "Type your message...",
-    "showBranding": true,
-    "siteId": "demo-site",
-    "topK": 5,
-    "temperature": 0.5,
-    "apiBase": "http://localhost:8000"
-  };
-      var script = document.createElement('script');
-      script.src = 'http://localhost:8000/widget.js';
-      document.head.appendChild(script);
-    })();
-  </script>
-    </body>
+(function(){
+  window.supportBotConfig = {"widgetId":"af5dcc2e-d5f9-4749-a7cb-404840a61af3","apiBase":"http://localhost:8000"};
+  var s = document.createElement('script'); s.src='http://localhost:8000/widget.js'; document.head.appendChild(s);
+})();
+</script>
+
+  </body>
 </html>

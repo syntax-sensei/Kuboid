@@ -21,7 +21,8 @@ type WidgetPreviewProps = {
   welcomeMessage: string;
   placeholder: string;
   showBranding: boolean;
-  siteId: string;
+    widgetId?: string;
+    siteId?: string;
   apiBase?: string;
   topK?: number;
   temperature?: number;
@@ -34,6 +35,7 @@ export function WidgetPreview({
   welcomeMessage,
   placeholder,
   showBranding,
+  widgetId,
   siteId,
   apiBase = API_BASE,
   topK = 5,
@@ -90,11 +92,12 @@ export function WidgetPreview({
     setTimeout(scrollToBottom, 20);
 
     try {
-      const tokenResponse = await fetch(`${apiBase}/widget/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ site_id: siteId }),
-      });
+  const tokenBody = widgetId ? { widget_id: widgetId } : (siteId ? { site_id: siteId } : {});
+        const tokenResponse = await fetch(`${apiBase}/widget/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(tokenBody),
+        });
 
       if (!tokenResponse.ok) {
         throw new Error("Failed to fetch widget token");
@@ -150,7 +153,7 @@ export function WidgetPreview({
       setIsLoading(false);
       setTimeout(scrollToBottom, 20);
     }
-  }, [apiBase, input, isLoading, messages, scrollToBottom, siteId, temperature, topK]);
+  }, [apiBase, input, isLoading, messages, scrollToBottom, widgetId, temperature, topK]);
 
   const handleSubmit = useCallback(
     (event: React.FormEvent) => {
@@ -177,11 +180,12 @@ export function WidgetPreview({
       );
 
       try {
-        const tokenResponse = await fetch(`${apiBase}/widget/token`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ site_id: siteId }),
-        });
+          const tokenBody = widgetId ? { widget_id: widgetId } : (siteId ? { site_id: siteId } : {});
+          const tokenResponse = await fetch(`${apiBase}/widget/token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(tokenBody),
+          });
 
         if (!tokenResponse.ok) {
           throw new Error("Failed to fetch widget token for feedback");
@@ -196,7 +200,8 @@ export function WidgetPreview({
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            site_id: siteId,
+            // analytics expects site_id; include widgetId so server can authorize
+            widget_id: widgetId,
             conversation_id: conversationId,
             turn_id: turnId,
             sentiment,
@@ -207,7 +212,7 @@ export function WidgetPreview({
         console.error("Failed to submit feedback", error);
       }
     },
-    [apiBase, siteId, conversationId]
+  [apiBase, widgetId, conversationId]
   );
 
   return (

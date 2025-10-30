@@ -24,13 +24,15 @@ from langchain_core.documents import Document as LangChainDocument
 
 # Qdrant imports
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
 # Supabase imports
 from supabase import create_client, Client
 
 # FastAPI imports
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Header
+import hmac
+import hashlib
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
@@ -81,6 +83,7 @@ embeddings = OpenAIEmbeddings(
 # Collection name for Qdrant
 COLLECTION_NAME = Config.COLLECTION_NAME
 URL_ACTIVITY_TABLE = "url_ingestion_activity"
+PROCESSING_STATUS_TABLE = "document_processing_status"
 
 WIDGET_SCRIPT_BASE_URL = os.getenv("WIDGET_SCRIPT_BASE_URL", "http://localhost:8000")
 FRONTEND_WIDGET_SCRIPT = os.getenv("FRONTEND_WIDGET_SCRIPT", "/widget.js")
@@ -192,6 +195,23 @@ class DocumentProcessor:
                 collection_name=COLLECTION_NAME,
                 vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
             )
+            # Ensure payload indexes exist for owner/widget fields so filtered search works.
+            # Qdrant requires indexes for keyword filtering. Create them if possible; ignore failures.
+            try:
+                qdrant_client.create_payload_index(collection_name=COLLECTION_NAME, field_name="owner_id", field_schema="keyword", wait=True)
+            except Exception:
+                try:
+                    qdrant_client.create_payload_index(collection_name=COLLECTION_NAME, field_name="owner_id", field_type="keyword", wait=True)
+                except Exception:
+                    logger.info("Could not create payload index for 'owner_id'")
+
+            try:
+                qdrant_client.create_payload_index(collection_name=COLLECTION_NAME, field_name="widget_id", field_schema="keyword", wait=True)
+            except Exception:
+                try:
+                    qdrant_client.create_payload_index(collection_name=COLLECTION_NAME, field_name="widget_id", field_type="keyword", wait=True)
+                except Exception:
+                    logger.info("Could not create payload index for 'widget_id'")
 
         # Generate valid UUIDs for point IDs
         import uuid
@@ -201,24 +221,50 @@ class DocumentProcessor:
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings_list)):
             # Generate a valid UUID for each point
             point_id = str(uuid.uuid4())
+            # Extract canonical owner information from chunk metadata when available
+            owner_id = None
+            try:
+                meta = chunk.metadata or {}
+                # Extract owner information from metadata
+                owner_id = meta.get("user_id")
+            except Exception:
+                meta = chunk.metadata or {}
 
-            point = PointStruct(
-                id=point_id,
-                vector=embedding,
-                payload={
-                    "text": chunk.page_content,
-                    "metadata": chunk.metadata,
-                    "document_id": document_id,
-                    "chunk_index": i,
-                    "created_at": datetime.now().isoformat(),
-                },
-            )
+            payload = {
+                "text": chunk.page_content,
+                "metadata": meta,
+                "document_id": document_id,
+                "chunk_index": i,
+                "created_at": datetime.now().isoformat(),
+            }
+
+            # Add top-level owner_id for reliable filtering
+            if owner_id:
+                payload["owner_id"] = owner_id
+            # If this chunk was produced in a widget-scoped ingestion, preserve widget_id
+            try:
+                widget_id_meta = meta.get("widget_id")
+                if widget_id_meta:
+                    payload["widget_id"] = widget_id_meta
+            except Exception:
+                pass
+
+            point = PointStruct(id=point_id, vector=embedding, payload=payload)
             points.append(point)
 
         # Insert points into Qdrant
-        qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)
+        try:
+            # Log a sample of payload keys for diagnostics
+            try:
+                sample_payloads = [p.payload for p in points[:3]]
+                logger.info("Upserting %d points. Sample payload keys: %s", len(points), [list((pp or {}).keys()) for pp in sample_payloads])
+            except Exception:
+                pass
 
-        logger.info(f"Stored {len(points)} chunks for document {document_id}")
+            qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)
+            logger.info(f"Stored {len(points)} chunks for document {document_id}")
+        except Exception as exc:
+            logger.exception("Failed to upsert points to Qdrant: %s", exc)
 
 
 class IngestionPipeline:
@@ -243,7 +289,6 @@ class IngestionPipeline:
         self,
         request_id: str,
         url: str,
-        site_id: str | None = None,
         user_id: str | None = None,
         metadata: Dict[str, Any] | None = None,
     ):
@@ -254,8 +299,6 @@ class IngestionPipeline:
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        if site_id is not None:
-            payload["site_id"] = site_id
         if user_id is not None:
             payload["user_id"] = user_id
 
@@ -272,7 +315,6 @@ class IngestionPipeline:
         chunks_created: int | None = None,
         error: str | None = None,
         metadata: Dict[str, Any] | None = None,
-        site_id: str | None = None,
         user_id: str | None = None,
     ):
         payload = {
@@ -290,16 +332,13 @@ class IngestionPipeline:
         if metadata is not None:
             payload["metadata"] = metadata
 
-        if site_id is not None:
-            payload["site_id"] = site_id
-
         if user_id is not None:
             payload["user_id"] = user_id
 
         await self._record_url_activity(payload)
 
     async def process_document_from_url(
-        self, url: str, user_id: str | None = None, site_id: str | None = None
+        self, url: str, user_id: str | None = None
     ) -> Dict[str, Any]:
         """Process content fetched directly from a URL"""
         try:
@@ -318,8 +357,6 @@ class IngestionPipeline:
 
             if user_id is not None:
                 metadata["user_id"] = user_id
-            if site_id is not None:
-                metadata["site_id"] = site_id
 
             chunks = self.processor.chunk_text(text, metadata)
             logger.info(f"📦 Created {len(chunks)} chunks from URL")
@@ -354,6 +391,14 @@ class IngestionPipeline:
         try:
             logger.info(f"🚀 Processing document: {file_path}")
 
+            # Mark processing as started in status table (best-effort)
+            try:
+                document_id = file_path.replace("/", "_").replace("-", "_")
+                self._update_processing_status(file_path=document_id, status="processing")
+            except Exception:
+                # Non-fatal: continue processing even if status update fails
+                logger.debug("Failed to record processing start; continuing")
+
             # Download file from Supabase
             response = supabase.storage.from_("Docs").download(file_path)
             if not response:
@@ -378,6 +423,16 @@ class IngestionPipeline:
                 "processed_at": datetime.now().isoformat(),
                 "text_length": len(text),
             }
+            # Attempt to derive user_id from the file path prefix if present (e.g. "<user_id>/filename.pdf")
+            try:
+                if "/" in file_path:
+                    possible_user = file_path.split("/", 1)[0]
+                    # Basic sanity: avoid empty and placeholder names
+                    if possible_user and not possible_user.startswith("."):
+                        metadata["user_id"] = possible_user
+            except Exception:
+                # If anything goes wrong, don't block processing — leave metadata as-is
+                pass
 
             # Chunk text
             chunks = self.processor.chunk_text(text, metadata)
@@ -397,6 +452,11 @@ class IngestionPipeline:
             await self.processor.store_in_qdrant(chunks, embeddings_list, document_id)
 
             logger.info(f"🎉 Successfully processed {file_name}")
+            # Mark processing as completed
+            try:
+                self._update_processing_status(file_path=document_id, status="processed", chunks_count=len(chunks))
+            except Exception:
+                logger.warning("Failed to persist processing completion status")
             return {
                 "status": "success",
                 "document_id": document_id,
@@ -407,24 +467,42 @@ class IngestionPipeline:
 
         except Exception as e:
             logger.error(f"❌ Error processing {file_path}: {str(e)}")
+            # Mark processing as errored
+            try:
+                document_id = file_path.replace("/", "_").replace("-", "_")
+                self._update_processing_status(file_path=document_id, status="error", error=str(e))
+            except Exception:
+                logger.debug("Failed to persist error status")
+
             return {"status": "error", "error": str(e)}
 
     async def is_document_processed(self, file_path: str) -> bool:
         """Check if a document has already been processed"""
         try:
-            # Check if any chunks exist for this document in Qdrant
+            # Prefer authoritative record in Supabase processing status table
             document_id = file_path.replace("/", "_").replace("-", "_")
+            try:
+                resp = (
+                    supabase.table(PROCESSING_STATUS_TABLE)
+                    .select("status")
+                    .eq("id", document_id)
+                    .limit(1)
+                    .execute()
+                )
+                rows = resp.data if resp and hasattr(resp, "data") else []
+                if rows and rows[0].get("status") == "processed":
+                    return True
+            except Exception as exc:
+                logger.debug(f"Processing status table check failed: {exc}")
 
-            # Search for existing chunks with this document_id
-            search_result = qdrant_client.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter={
-                    "must": [{"key": "document_id", "match": {"value": document_id}}]
-                },
-                limit=1,
-            )
-
-            return len(search_result[0]) > 0
+            # Fallback: check Qdrant for any point with matching document_id
+            try:
+                q_filter = Filter(must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))])
+                points, _ = qdrant_client.scroll(collection_name=COLLECTION_NAME, scroll_filter=q_filter, limit=1)
+                return len(points) > 0
+            except Exception as exc:
+                logger.warning(f"Could not check Qdrant for document presence: {exc}")
+                return False
 
         except Exception as e:
             logger.warning(f"Could not check if document is processed: {e}")
@@ -489,6 +567,7 @@ class IngestionPipeline:
                     continue
 
                 logger.info(f"🔄 Processing: {file_path}")
+                # Process document; points will be tagged with owner/user info only
                 result = await self.process_document_by_path(file_path)
                 results.append({"file_path": file_path, "result": result})
 
@@ -520,24 +599,94 @@ class IngestionPipeline:
     ):
         """Update processing status in Supabase"""
         try:
-            # You can create a table to track processing status
-            # For now, we'll just log it
-            logger.info(f"Processing status for {file_path}: {status}")
-            if error:
-                logger.error(f"Error details: {error}")
-        except Exception as e:
-            logger.error(f"Failed to update processing status: {str(e)}")
+            # Upsert a record into Supabase for processing status. This is the
+            # authoritative source that we check before reprocessing files.
+            payload = {
+                "id": file_path,
+                "file_path": file_path,
+                "status": status,
+                "chunks_count": chunks_count,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
 
-    async def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+            if status == "processing":
+                payload["started_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                # For processed or error states mark completed_at
+                payload["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+            if error:
+                payload["error"] = (error[:500]) if isinstance(error, str) else str(error)
+
+            # Best-effort: if the table doesn't exist this will raise; we don't want
+            # this to block ingestion so we log and continue.
+            supabase.table(PROCESSING_STATUS_TABLE).upsert(payload, on_conflict="id").execute()
+            logger.info(f"Processing status updated for {file_path}: {status}")
+        except Exception as e:
+            logger.warning(f"Failed to update processing status: {str(e)}")
+
+    async def retrieve(self, query: str, top_k: int = 5, owner_id: str | None = None, widget_id: str | None = None) -> List[Dict[str, Any]]:
+        """Retrieve top-k documents for a query.
+
+        Filtering is performed only on the basis of `owner_id` (payload.owner_id).
+        If `owner_id` is not provided, no owner/site-level filtering is applied.
+        Widget-scoped points (payload.widget_id) are considered only when owner filtering is active
+        and widget-specific points exist.
+        """
         if not query.strip():
             return []
 
         query_embedding = await embeddings.aembed_query(query)
+
+        # Decide on metadata filter to restrict results (owner-only filtering)
+        qdrant_filter = None
+        try:
+            if owner_id:
+                base_must = [FieldCondition(key="owner_id", match=MatchValue(value=owner_id))]
+
+                # If widget_id provided, check if any points exist with payload.widget_id == widget_id
+                if widget_id:
+                    try:
+                        widget_points, _ = qdrant_client.scroll(
+                            collection_name=COLLECTION_NAME,
+                            scroll_filter=Filter(must=[FieldCondition(key="widget_id", match=MatchValue(value=widget_id))]),
+                            limit=1,
+                        )
+                        has_widget_scoped = len(widget_points) > 0
+                    except Exception:
+                        has_widget_scoped = False
+
+                    if has_widget_scoped:
+                        # Restrict to widget-scoped points that belong to the owner
+                        qdrant_filter = Filter(must=base_must + [FieldCondition(key="widget_id", match=MatchValue(value=widget_id))])
+                    else:
+                        # No widget-scoped points found; restrict to owner-level points
+                        qdrant_filter = Filter(must=base_must)
+                else:
+                    qdrant_filter = Filter(must=base_must)
+            else:
+                qdrant_filter = None
+        except Exception:
+            qdrant_filter = None
+
+        # Execute search with optional filter
+        # Log filter for diagnostics
+        try:
+            logger.info("Qdrant search: collection=%s top_k=%s owner_id=%s widget_id=%s qdrant_filter=%s", COLLECTION_NAME, top_k, owner_id, widget_id, qdrant_filter)
+        except Exception:
+            pass
+        # qdrant-client versions expect the named parameter `query_filter` (not `filter`) for search
+        # Use `query_filter` so this works across qdrant-client releases.
         search_results = qdrant_client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_embedding,
             limit=top_k,
+            query_filter=qdrant_filter,
         )
+        try:
+            logger.info("Qdrant returned %d hits", len(search_results))
+        except Exception:
+            pass
 
         documents = []
         for result in search_results:
@@ -635,7 +784,7 @@ class UrlIngestionRequest(BaseModel):
 
 
 class WidgetTokenRequest(BaseModel):
-    site_id: str
+    widget_id: str
     expires_in: int | None = 3600
 
 
@@ -645,6 +794,17 @@ class WidgetChatRequest(BaseModel):
     top_k: int | None = 5
     temperature: float | None = 0.2
     conversation_id: str | None = None
+
+
+class WidgetCreateRequest(BaseModel):
+    site_id: str
+    name: str | None = None
+    allowed_origins: List[str] | None = None
+
+
+class WidgetUpdateRequest(BaseModel):
+    name: str | None = None
+    allowed_origins: List[str] | None = None
 
 
 from typing import Optional
@@ -667,7 +827,7 @@ def _extract_user_id_from_auth(authorization: str | None) -> str:
 
 def _record_chat_turn(
     *,
-    site_id: str,
+    owner_id: str,
     conversation_id: str,
     user_message: str,
     assistant_message: str | None,
@@ -677,7 +837,7 @@ def _record_chat_turn(
     try:
         payload = {
             "conversation_id": conversation_id,
-            "site_id": site_id,
+            "owner_id": owner_id,
             "user_message": user_message,
             "assistant_message": assistant_message,
             "status": status,
@@ -761,7 +921,6 @@ async def process_url_endpoint(
     await pipeline._record_url_activity_start(
         request.request_id,
         request.url,
-        site_id=user_id,
         user_id=user_id,
         metadata=request.metadata,
     )
@@ -771,7 +930,6 @@ async def process_url_endpoint(
             request.request_id,
             "error",
             url=request.url,
-            site_id=user_id,
             user_id=user_id,
             error=result.get("error"),
             metadata=request.metadata,
@@ -782,7 +940,6 @@ async def process_url_endpoint(
         request.request_id,
         "success",
         url=request.url,
-        site_id=user_id,
         user_id=user_id,
         chunks_created=result.get("chunks_created"),
         metadata=request.metadata,
@@ -791,25 +948,304 @@ async def process_url_endpoint(
 
 
 @app.post("/widget/token")
-async def create_widget_token(request: WidgetTokenRequest):
+async def create_widget_token(
+    request: WidgetTokenRequest,
+    origin: str | None = Header(None),
+    x_widget_secret: str | None = Header(None),
+):
+    """Issue a short-lived widget token for a specific widget instance.
+
+    This endpoint requires the browser Origin header to match the widget's
+    allowed_origins (stored in the `widgets` table). The token contains both
+    `owner_id` and `widget_id` so subsequent requests can be validated.
+    """
     try:
         import jwt
 
-        expires_in = request.expires_in or 3600
+        widget_id = request.widget_id
+        # Lookup widget record
+        try:
+            resp = supabase.table("widgets").select("*").eq("id", widget_id).limit(1).execute()
+            widget_rows = resp.data if resp and hasattr(resp, "data") else []
+            widget = widget_rows[0] if widget_rows else None
+        except Exception as exc:
+            logger.warning(f"Failed to fetch widget record: {exc}")
+            widget = None
+
+        if not widget:
+            raise HTTPException(status_code=404, detail="Widget not found")
+
+        allowed_origins = widget.get("allowed_origins") or []
+        owner_id = widget.get("owner_id")
+
+        # Authorization modes:
+        # 1) Browser: Origin header must be present and match an allowed origin (same as before)
+        # 2) Server-to-server: Request may include X-Widget-Secret header matching the widget's secret
+        # DB schema may store a hashed secret under `secret_hash` (preferred) or plaintext under `secret` (legacy).
+        secret_hash_stored = widget.get("secret_hash")
+        legacy_secret_stored = widget.get("secret")
+
+        origin_ok = False
+        secret_ok = False
+
+        # Check widget secret if provided (server-to-server flow)
+        if x_widget_secret and secret_hash_stored:
+            # compute HMAC and compare
+            try:
+                expected = hmac.new(Config.EMBED_SECRET.encode(), x_widget_secret.encode(), hashlib.sha256).hexdigest()
+                if expected == secret_hash_stored:
+                    secret_ok = True
+            except Exception:
+                pass
+        elif x_widget_secret and legacy_secret_stored:
+            # Backwards compatibility: stored plaintext secret
+            if x_widget_secret == legacy_secret_stored:
+                secret_ok = True
+
+        # Check origin if provided (browser flow)
+        if origin and allowed_origins:
+            for allowed in allowed_origins:
+                try:
+                    if allowed == origin:
+                        origin_ok = True
+                        break
+                except Exception:
+                    continue
+
+        if not (origin_ok or secret_ok):
+            logger.warning("Widget token request rejected: origin/secret validation failed")
+            raise HTTPException(status_code=401, detail="Unauthorized widget token request")
+
+        expires_in = request.expires_in or 60 * 15  # default 15 minutes for widget tokens
         issued_at = datetime.now(timezone.utc)
         expiry = issued_at + timedelta(seconds=expires_in)
 
         payload = {
-            "site_id": request.site_id,
+            "owner_id": owner_id,
+            "widget_id": widget_id,
             "iat": int(issued_at.timestamp()),
             "exp": int(expiry.timestamp()),
         }
 
         token = jwt.encode(payload, Config.EMBED_SECRET, algorithm="HS256")
         return {"token": token, "expires_at": expiry.isoformat()}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create widget token: {e}")
         raise HTTPException(status_code=500, detail="Could not generate widget token")
+
+
+@app.post("/widgets")
+async def create_widget(request: WidgetCreateRequest, authorization: str = Header(None)):
+    """Create a new widget instance for the authenticated owner. Widget id is generated server-side.
+
+    Requires a valid owner JWT in Authorization header (Supabase auth token). Returns the created widget record.
+    """
+    try:
+        owner_id = _extract_user_id_from_auth(authorization)
+        if not authorization or owner_id == "anonymous":
+            raise HTTPException(status_code=401, detail="Authentication required to create widget")
+
+        import uuid
+        widget_id = str(uuid.uuid4())
+
+        payload = {
+            "id": widget_id,
+            "site_id": request.site_id,
+            "owner_id": owner_id,
+            "name": request.name,
+            "allowed_origins": request.allowed_origins or [],
+                # Generate a per-widget secret hash for server-to-server flows (stored in `secret_hash` column)
+                "secret_hash": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Ensure the site exists (widgets.site_id has FK to sites.id). If the site
+        # doesn't exist, create it for this owner (best-effort) to avoid FK errors.
+        try:
+            site_resp = supabase.table("sites").select("*").eq("id", request.site_id).limit(1).execute()
+            site_rows = site_resp.data if site_resp and hasattr(site_resp, "data") else []
+        except Exception as exc:
+            logger.warning(f"Failed to check site existence: {exc}")
+            site_rows = []
+
+        if not site_rows:
+            # Create a minimal site record so widget FK constraint is satisfied
+            try:
+                site_payload = {
+                    "id": request.site_id,
+                    "user_id": owner_id,
+                    "name": request.site_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                create_site_resp = supabase.table("sites").insert(site_payload).execute()
+                if hasattr(create_site_resp, "error") and create_site_resp.error:
+                    logger.error("Failed to create site record: %s", create_site_resp.error)
+                    # Let the error surface to client
+                    raise Exception(getattr(create_site_resp, "error", "Could not create site"))
+                logger.info("Created site record for id=%s", request.site_id)
+            except Exception as exc:
+                logger.exception("Failed to create site required for widget: %s", exc)
+                raise HTTPException(status_code=500, detail=f"Could not create site {request.site_id}: {exc}")
+
+        import secrets
+        # create a widget secret and include its HMAC-SHA256 in payload under `secret_hash`
+        try:
+            secret_val = secrets.token_urlsafe(32)
+            # compute HMAC-SHA256 using EMBED_SECRET as key
+            secret_hash = hmac.new(
+                Config.EMBED_SECRET.encode(), secret_val.encode(), hashlib.sha256
+            ).hexdigest()
+            payload["secret_hash"] = secret_hash
+        except Exception:
+            secret_val = None
+            secret_hash = None
+
+        try:
+            resp = supabase.table("widgets").insert(payload).execute()
+            # Log Supabase response for debugging
+            logger.info("Supabase insert response: %s", getattr(resp, "data", None))
+            if hasattr(resp, "error") and resp.error:
+                # Postgrest may return dict-like error
+                err = getattr(resp, "error", resp)
+                logger.error("Supabase returned error on widget insert: %s", err)
+                raise Exception(getattr(resp, "error", "Unknown supabase error"))
+
+            created = resp.data[0] if resp and hasattr(resp, "data") and resp.data else payload
+            # Return the secret only at creation time to the owner (do not leak in list endpoints)
+            if secret_val:
+                created = dict(created)
+                created["secret"] = secret_val
+                created["secret_persisted"] = True if secret_hash else False
+            return {"widget": created}
+        except Exception as exc:
+            # Handle case where the widgets table schema doesn't include `secret`
+            msg = str(exc)
+            logger.exception("Failed to insert widget into Supabase: %s", exc)
+            if "secret_hash" in msg or "Could not find the 'secret_hash'" in msg or "secret" in msg:
+                # Retry insert without `secret_hash` to avoid schema problems, but still return the generated secret
+                try:
+                    payload_no_secret = dict(payload)
+                    payload_no_secret.pop("secret_hash", None)
+                    resp2 = supabase.table("widgets").insert(payload_no_secret).execute()
+                    if hasattr(resp2, "error") and resp2.error:
+                        logger.error("Retry insert without secret_hash also failed: %s", resp2.error)
+                        raise Exception(getattr(resp2, "error", "Supabase insert failed"))
+                    created = resp2.data[0] if resp2 and hasattr(resp2, "data") and resp2.data else payload_no_secret
+                    # Return the generated secret to the caller but note it was not persisted
+                    created = dict(created)
+                    if secret_val:
+                        created["secret"] = secret_val
+                        created["secret_persisted"] = False
+                    logger.warning("secret_hash column missing in DB; inserted widget without secret_hash. Please run migration to add the column: ALTER TABLE widgets ADD COLUMN secret_hash text;")
+                    return {"widget": created}
+                except Exception as exc2:
+                    logger.exception("Retry insert without secret failed: %s", exc2)
+                    raise HTTPException(status_code=500, detail=str(exc2))
+            # Other errors: surface to client
+            raise HTTPException(status_code=500, detail=msg)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create widget: {e}")
+        raise HTTPException(status_code=500, detail="Could not create widget")
+
+
+@app.get("/widgets")
+async def list_widgets(authorization: str = Header(None)):
+    """List widgets owned by the authenticated user."""
+    try:
+        owner_id = _extract_user_id_from_auth(authorization)
+        if not authorization or owner_id == "anonymous":
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        resp = supabase.table("widgets").select("*").eq("owner_id", owner_id).execute()
+        rows = resp.data if resp and hasattr(resp, "data") else []
+        # Do not return secret in list responses for security
+        sanitized = []
+        for r in rows:
+            if isinstance(r, dict):
+                r = dict(r)
+                # remove any secret material
+                r.pop("secret", None)
+                r.pop("secret_hash", None)
+            sanitized.append(r)
+        return {"widgets": sanitized}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list widgets: {e}")
+        raise HTTPException(status_code=500, detail="Could not list widgets")
+
+
+@app.patch("/widgets/{widget_id}")
+async def update_widget(widget_id: str, request: WidgetUpdateRequest, authorization: str = Header(None)):
+    """Update widget fields (name, allowed_origins). Owner-only."""
+    try:
+        owner_id = _extract_user_id_from_auth(authorization)
+        if not authorization or owner_id == "anonymous":
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        # Verify ownership
+        resp = supabase.table("widgets").select("*").eq("id", widget_id).limit(1).execute()
+        rows = resp.data if resp and hasattr(resp, "data") else []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Widget not found")
+        widget = rows[0]
+        if str(widget.get("owner_id")) != str(owner_id):
+            raise HTTPException(status_code=403, detail="Not authorized to modify this widget")
+
+        update_payload = {}
+        if request.name is not None:
+            update_payload["name"] = request.name
+        if request.allowed_origins is not None:
+            update_payload["allowed_origins"] = request.allowed_origins
+
+        if not update_payload:
+            return {"widget": widget}
+
+        upd = supabase.table("widgets").update(update_payload).eq("id", widget_id).execute()
+        if hasattr(upd, "error") and upd.error:
+            logger.error("Supabase error on widget update: %s", upd.error)
+            raise Exception(getattr(upd, "error", "Supabase update error"))
+
+        updated = upd.data[0] if upd and hasattr(upd, "data") and upd.data else None
+        return {"widget": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to update widget: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/widgets/{widget_id}")
+async def delete_widget(widget_id: str, authorization: str = Header(None)):
+    """Delete a widget. Owner-only."""
+    try:
+        owner_id = _extract_user_id_from_auth(authorization)
+        if not authorization or owner_id == "anonymous":
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        # Verify ownership
+        resp = supabase.table("widgets").select("owner_id").eq("id", widget_id).limit(1).execute()
+        rows = resp.data if resp and hasattr(resp, "data") else []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Widget not found")
+        if str(rows[0].get("owner_id")) != str(owner_id):
+            raise HTTPException(status_code=403, detail="Not authorized to delete this widget")
+
+        res = supabase.table("widgets").delete().eq("id", widget_id).execute()
+        if hasattr(res, "error") and res.error:
+            logger.error("Supabase error on widget delete: %s", res.error)
+            raise Exception(getattr(res, "error", "Supabase delete error"))
+
+        return {"status": "deleted", "widget_id": widget_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to delete widget: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/widget/chat")
@@ -827,9 +1263,32 @@ async def widget_chat(request: WidgetChatRequest, authorization: str = Header(No
             logger.error(f"Invalid widget token: {exc}")
             raise HTTPException(status_code=401, detail="Invalid authorization token")
 
-        site_id = decoded.get("site_id")
-        if not site_id:
-            raise HTTPException(status_code=400, detail="Token missing site id")
+        widget_id = decoded.get("widget_id")
+        owner_id = decoded.get("owner_id")
+        if not widget_id:
+            raise HTTPException(status_code=400, detail="Token missing widget_id")
+
+        # Validate widget record and ensure the token's site_id matches the widget
+        try:
+            resp = supabase.table("widgets").select("*").eq("id", widget_id).limit(1).execute()
+            rows = resp.data if resp and hasattr(resp, "data") else []
+            widget = rows[0] if rows else None
+        except Exception as exc:
+            logger.warning(f"Failed to fetch widget for validation: {exc}")
+            widget = None
+
+        if not widget:
+            logger.error(f"Widget validation failed for widget_id={widget_id}")
+            raise HTTPException(status_code=401, detail="Invalid widget token")
+
+        # Prefer owner_id from token; fall back to DB value when token doesn't include it
+        if not owner_id:
+            owner_id = widget.get("owner_id")
+
+        # Ensure the token (or fallback) matches the widget record
+        if str(widget.get("owner_id")) != str(owner_id):
+            logger.error(f"Widget owner validation failed for widget_id={widget_id} (expected owner_id={widget.get('owner_id')} got {owner_id})")
+            raise HTTPException(status_code=401, detail="Invalid widget token")
 
         conversation_id = request.conversation_id or decoded.get("conversation_id")
         new_conversation = False
@@ -839,7 +1298,8 @@ async def widget_chat(request: WidgetChatRequest, authorization: str = Header(No
 
         started_at = datetime.now(timezone.utc)
 
-        documents = await pipeline.retrieve(request.query, top_k=request.top_k or 5)
+        # Restrict retrieval to the widget's owner_id (prefer owner-based filtering) and be widget-aware
+        documents = await pipeline.retrieve(request.query, top_k=request.top_k or 5, owner_id=owner_id, widget_id=widget_id)
         answer = await pipeline.generate_answer(
             request.query,
             documents,
@@ -863,7 +1323,7 @@ async def widget_chat(request: WidgetChatRequest, authorization: str = Header(No
         turn_id = None
         if conversation_id:
             turn_id = _record_chat_turn(
-                site_id=site_id,
+                owner_id=owner_id,
                 conversation_id=conversation_id,
                 user_message=request.query,
                 assistant_message=answer,
@@ -961,14 +1421,14 @@ async def list_url_activities(limit: int = 20, authorization: str = Header(None)
 async def widget_script():
     script = f"""
     (function() {{
-      const config = window.supportBotConfig || {{}};
-      const SITE_ID = config.siteId || 'default';
+    const config = window.supportBotConfig || {{}};
+    const WIDGET_ID = config.widgetId || 'default';
       const API_BASE = config.apiBase || '{WIDGET_SCRIPT_BASE_URL}';
-      const WIDGET_ID = 'supportbot-widget-container';
+    const WIDGET_CONTAINER_ID = 'supportbot-widget-container';
 
-      if (document.getElementById(WIDGET_ID)) {{
-        return;
-      }}
+            if (document.getElementById(WIDGET_CONTAINER_ID)) {{
+                return;
+            }}
 
       const styles = document.createElement('style');
       styles.textContent = `
@@ -1007,8 +1467,8 @@ async def widget_script():
       `;
       document.head.appendChild(styles);
 
-      const container = document.createElement('div');
-      container.id = WIDGET_ID;
+    const container = document.createElement('div');
+    container.id = WIDGET_CONTAINER_ID;
       document.body.appendChild(container);
 
       const state = {{
@@ -1151,11 +1611,11 @@ async def widget_script():
             rerender();
 
             try {{
-              const tokenResponse = await fetch(API_BASE + '/widget/token', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ site_id: SITE_ID }}),
-              }});
+                            const tokenResponse = await fetch(API_BASE + '/widget/token', {{
+                                method: 'POST',
+                                headers: {{ 'Content-Type': 'application/json' }},
+                                body: JSON.stringify({{ widget_id: WIDGET_ID }}),
+                            }});
 
               if (!tokenResponse.ok) {{
                 throw new Error('Token request failed');
@@ -1228,11 +1688,11 @@ async def widget_script():
         rerender();
 
         try {{
-          const tokenResponse = await fetch(API_BASE + '/widget/token', {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{ site_id: SITE_ID }}),
-          }});
+                            const tokenResponse = await fetch(API_BASE + '/widget/token', {{
+                                method: 'POST',
+                                headers: {{ 'Content-Type': 'application/json' }},
+                                body: JSON.stringify({{ widget_id: WIDGET_ID }}),
+                            }});
 
           if (!tokenResponse.ok) {{
             throw new Error('Feedback token request failed');
@@ -1246,13 +1706,13 @@ async def widget_script():
               'Content-Type': 'application/json',
               'Authorization': 'Bearer ' + token,
             }},
-            body: JSON.stringify({{
-              site_id: SITE_ID,
-              conversation_id: state.conversationId,
-              turn_id: turnId,
-              sentiment,
-              metadata: {{ source: 'widget' }},
-            }}),
+                        body: JSON.stringify({{
+                            widget_id: WIDGET_ID,
+                            conversation_id: state.conversationId,
+                            turn_id: turnId,
+                            sentiment,
+                            metadata: {{ source: 'widget' }},
+                        }}),
           }});
         }} catch (error) {{
           console.error('Feedback submission failed:', error);
@@ -1318,8 +1778,17 @@ async def storage_webhook(request: dict):
             if file_path and file_name:
                 logger.info(f"🚀 New file uploaded: {file_name}")
                 logger.info(f"📁 File path: {file_path}")
-                # Process document in background
-                asyncio.create_task(pipeline.process_document_by_path(file_path))
+                # Skip processing if we've already processed this document
+                try:
+                    already = await pipeline.is_document_processed(file_path)
+                except Exception:
+                    already = False
+
+                if already:
+                    logger.info(f"⏭️ Skipping webhook processing for already-processed file: {file_path}")
+                else:
+                    # Process document in background
+                    asyncio.create_task(pipeline.process_document_by_path(file_path))
             else:
                 logger.warning(f"Invalid webhook data: {request}")
         else:

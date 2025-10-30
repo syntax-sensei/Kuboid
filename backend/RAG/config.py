@@ -39,7 +39,7 @@ class Config:
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
     
     # Collection name
-    COLLECTION_NAME = os.getenv("COLLECTION_NAME", "kuboid")
+    COLLECTION_NAME = os.getenv("COLLECTION_NAME")
     
     @classmethod
     def validate(cls):
