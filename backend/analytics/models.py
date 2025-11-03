@@ -54,12 +54,17 @@ class KnowledgeGapsResponse(BaseModel):
 
 
 class FeedbackPayload(BaseModel):
-    site_id: str
+    # Accept either a site identifier or a widget identifier so callers
+    # (e.g. widgets) can send widget_id only and the server will resolve
+    # the corresponding site. site_id remains the canonical stored value.
+    site_id: Optional[str] = None
+    widget_id: Optional[str] = None
     conversation_id: str
     turn_id: str
     sentiment: Literal["positive", "neutral", "negative"]
     notes: Optional[str] = None
     metadata: dict = Field(default_factory=dict)
+    user_id: Optional[str] = None
 
 
 class KnowledgeGapUpdate(BaseModel):

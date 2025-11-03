@@ -46,8 +46,8 @@ export function AuthForm({
             </CardTitle>
             <CardDescription>
               {mode === "login"
-                ? "Sign in to your SupportBot account"
-                : "Get started with SupportBot"}
+                ? "Sign in to your Kuboid account"
+                : "Get started with Kuboid"}
             </CardDescription>
           </div>
         </CardHeader>

@@ -20,8 +20,11 @@ export default function Widget() {
     showBranding: true,
     topK: 5,
     temperature: 0.2,
-  apiBase: API_BASE,
+    apiBase: API_BASE,
   });
+
+  // allow the user to set the widget name when creating a widget
+  const [widgetName, setWidgetName] = useState<string>("");
 
   const [createdWidgetId, setCreatedWidgetId] = useState<string | null>(null);
 
@@ -42,7 +45,7 @@ export default function Widget() {
   (function() {
     window.supportBotConfig = ${JSON.stringify({ ...config, widgetId: createdWidgetId || undefined }, null, 2)};
     var script = document.createElement('script');
-    script.src = '${config.apiBase.replace(/\/$/, "")}/widget.js';
+    script.src = '${API_BASE.replace(/\/$/, "")}/widget.js';
     document.head.appendChild(script);
   })();
 </script>`;
@@ -80,6 +83,23 @@ export default function Widget() {
 
   useEffect(() => {
     fetchWidgets();
+
+    // Auto-select the user's first site (if any) so widget creation doesn't require manual site_id entry
+    (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userId = session?.user?.id;
+        if (!userId) return;
+        const { data: sites, error } = await supabase.from('sites').select('id,name').eq('user_id', userId).limit(1);
+        if (!error && sites && sites.length > 0) {
+          const site = sites[0];
+          setConfig((prev: any) => ({ ...(prev || {}), siteId: site.id }));
+          toast({ title: 'Site selected', description: `Using site: ${site.name || site.id}` });
+        }
+      } catch (err) {
+        // ignore
+      }
+    })();
   }, []);
 
   function makeEmbedCode(widgetId: string) {
@@ -184,9 +204,18 @@ export default function Widget() {
                     )}
                   </Button>
                   <div className="mt-4">
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium mb-1">Widget name</label>
+                      <Input value={widgetName} onChange={(e) => setWidgetName(e.target.value)} placeholder="My widget" />
+                    </div>
+
                     <Button
                       onClick={async () => {
                         try {
+                            if (!config.siteId) {
+                              toast({ title: "Missing site", description: "Please select a site before creating a widget.", variant: "destructive" });
+                              return;
+                            }
                             // include Authorization header with Supabase access token when available
                             const {
                               data: { session },
@@ -196,10 +225,10 @@ export default function Widget() {
                             const headers: Record<string, string> = { "Content-Type": "application/json" };
                             if (token) headers["Authorization"] = `Bearer ${token}`;
 
-                            const resp = await fetch(`${config.apiBase.replace(/\/$/, "")}/widgets`, {
+                            const resp = await fetch(`${API_BASE.replace(/\/$/, "")}/widgets`, {
                               method: "POST",
                               headers,
-                              body: JSON.stringify({ site_id: config.siteId, name: "Auto widget" }),
+                              body: JSON.stringify({ site_id: config.siteId, name: widgetName }),
                             });
                           if (!resp.ok) throw new Error("Failed to create widget");
                           const data = await resp.json();

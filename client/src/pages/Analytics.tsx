@@ -79,7 +79,9 @@ export default function Analytics() {
 
   const fetchOverview = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/analytics/overview`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id ?? "anonymous";
+      const response = await fetch(`${API_BASE}/analytics/overview?user_id=${encodeURIComponent(userId)}`);
       if (!response.ok) {
         throw new Error("Failed to load analytics overview");
       }
@@ -92,7 +94,9 @@ export default function Analytics() {
 
   const fetchGaps = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/analytics/knowledge-gaps`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id ?? "anonymous";
+      const response = await fetch(`${API_BASE}/analytics/knowledge-gaps?user_id=${encodeURIComponent(userId)}`);
       if (!response.ok) {
         throw new Error("Failed to load knowledge gaps");
       }
@@ -190,8 +194,29 @@ export default function Analytics() {
         const err = await notify.json().catch(() => ({}));
         throw new Error(err.detail ?? "Failed to notify analytics about linked sources");
       }
+      toast({ title: "Linked", description: `Linked ${uploadResults.length} document(s) to "${activeGapTopic}".` });
 
-  toast({ title: "Linked", description: `Linked ${uploadResults.length} document(s) to "${activeGapTopic}".` });
+      // After linking docs, ask the user if the gap is resolved and mark resolved if confirmed
+      try {
+        const confirmed = window.confirm(`Did this document resolve the gap "${activeGapTopic}"? Click OK to mark as resolved.`);
+        if (confirmed) {
+          const markResp = await fetch(`${API_BASE}/analytics/knowledge-gaps/actions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ gap_topic: activeGapTopic, action: "mark_resolved", metadata: { user_id: userId } }),
+          });
+          if (markResp.ok) {
+            toast({ title: "Marked resolved", description: `Marked "${activeGapTopic}" as resolved.` });
+            setGaps((prev) => prev.map((g) => (g.topic === activeGapTopic ? { ...g, status: 'resolved' } : g)));
+          } else {
+            const err = await markResp.json().catch(() => ({}));
+            toast({ title: "Failed to mark resolved", description: err.detail ?? "Mark resolved failed", variant: "destructive" });
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
       setLinkDialogOpen(false);
       setActiveGapTopic(null);
       await fetchGaps();
@@ -236,8 +261,31 @@ export default function Analytics() {
         const err = await notify.json().catch(() => ({}));
         throw new Error(err.detail ?? "Failed to notify analytics about linked URL");
       }
+      toast({ title: "Linked", description: `Linked URL to "${activeGapTopic}".` });
 
-  toast({ title: "Linked", description: `Linked URL to "${activeGapTopic}".` });
+      // After linking a URL, ask user if this resolved the gap and mark resolved if confirmed
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userId = session?.user?.id ?? "anonymous";
+        const confirmed = window.confirm(`Did this URL resolve the gap "${activeGapTopic}"? Click OK to mark as resolved.`);
+        if (confirmed) {
+          const markResp = await fetch(`${API_BASE}/analytics/knowledge-gaps/actions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ gap_topic: activeGapTopic, action: "mark_resolved", metadata: { user_id: userId } }),
+          });
+          if (markResp.ok) {
+            toast({ title: "Marked resolved", description: `Marked "${activeGapTopic}" as resolved.` });
+            setGaps((prev) => prev.map((g) => (g.topic === activeGapTopic ? { ...g, status: 'resolved' } : g)));
+          } else {
+            const err = await markResp.json().catch(() => ({}));
+            toast({ title: "Failed to mark resolved", description: err.detail ?? "Mark resolved failed", variant: "destructive" });
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
       setLinkDialogOpen(false);
       setActiveGapTopic(null);
       await fetchGaps();
@@ -258,22 +306,16 @@ export default function Analytics() {
         trend: undefined,
       },
       {
-        title: "Unique Users",
-        value: summary ? summary.unique_users.toLocaleString() : "--",
-        icon: Users,
-        trend: undefined,
-      },
-      {
         title: "Avg Satisfaction",
         value: summary ? `${summary.avg_satisfaction.toFixed(0)}%` : "--",
         icon: TrendingUp,
         trend: undefined,
       },
-      {
-        title: "Knowledge Gaps",
-        value: summary ? summary.knowledge_gaps.toString() : "--",
-        icon: AlertCircle,
-      },
+      // {
+      //   title: "Knowledge Gaps",
+      //   value: summary ? summary.knowledge_gaps.toString() : "--",
+      //   icon: AlertCircle,
+      // },
       {
         title: "Avg Response Time",
         value:
@@ -328,6 +370,11 @@ export default function Analytics() {
         <p className="text-muted-foreground mt-1">
           Insights into customer queries and support patterns
         </p>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <RunAgentControl setOverview={setOverview} setGaps={setGaps} setError={setError} fetchOverview={fetchOverview} fetchGaps={fetchGaps} />
+        <ComputeGapsButton setGaps={setGaps} setError={setError} fetchGaps={fetchGaps} />
       </div>
 
       {error && (
@@ -572,5 +619,139 @@ export default function Analytics() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function RunAgentControl({ setOverview, setGaps, setError, fetchOverview, fetchGaps }: any) {
+  const [running, setRunning] = useState(false);
+  const [statusText, setStatusText] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  const run = async () => {
+    try {
+      setError(null);
+      setRunning(true);
+      setStatusText("Running analytics...");
+
+      // Get current user id from supabase session if available
+  const { data: { session } } = await supabase.auth.getSession();
+  const userId = session?.user?.id ?? "anonymous";
+
+  // Include the current user's id so the server can scope analytics to this owner.
+  const body: any = { user_id: userId };
+
+      // POST to run endpoint (do not rely on Authorization for analytics scoping)
+      const response = await fetch(`${API_BASE}/analytics/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Failed to run analytics agent");
+      }
+
+      const data = await response.json();
+      setStatusText("Completed");
+      toast({ title: "Analytics refreshed", description: "Analytics and knowledge gaps were recalculated." });
+
+      // Prefer returned overview/gaps if provided
+      if (data.overview) {
+        setOverview(data.overview);
+      } else {
+        await fetchOverview();
+      }
+
+      if (data.gaps) {
+        setGaps(data.gaps.gaps ?? []);
+      } else {
+        await fetchGaps();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      toast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setRunning(false);
+      setTimeout(() => setStatusText(null), 2000);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${running ? 'opacity-70 cursor-not-allowed' : 'bg-primary text-white hover:opacity-90'}`}
+        onClick={run}
+        disabled={running}
+      >
+        {running ? (
+          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+        ) : (
+          <svg className="h-4 w-4" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+        )}
+        <span>{running ? statusText ?? 'Processing...' : 'Run analytics'}</span>
+      </button>
+      {statusText && !running && <span className="text-sm text-muted-foreground">{statusText}</span>}
+    </div>
+  );
+}
+
+function ComputeGapsButton({ setGaps, setError, fetchGaps }: any) {
+  const [running, setRunning] = useState(false);
+  const { toast } = useToast();
+
+  const compute = async () => {
+    try {
+      setError(null);
+      setRunning(true);
+
+      // Trigger the analytics run endpoint (no user_id to compute across all owners)
+      const response = await fetch(`${API_BASE}/analytics/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Failed to compute knowledge gaps");
+      }
+
+      // Prefer returned gaps if available, otherwise re-fetch
+      const data = await response.json();
+      if (data?.gaps?.gaps) {
+        setGaps(data.gaps.gaps ?? []);
+      } else {
+        await fetchGaps();
+      }
+
+      toast({ title: "Computed", description: "Knowledge gaps recalculated." });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      toast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <button
+      className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${running ? 'opacity-70 cursor-not-allowed' : 'bg-secondary text-white hover:opacity-90'}`}
+      onClick={compute}
+      disabled={running}
+    >
+      {running ? (
+        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+      ) : (
+        <svg className="h-4 w-4" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+      )}
+      <span>{running ? 'Computing…' : 'Compute gaps'}</span>
+    </button>
   );
 }

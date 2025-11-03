@@ -356,7 +356,7 @@ export function WidgetPreview({
             </form>
             {showBranding && (
               <p className="text-xs text-center mt-2 text-muted-foreground">
-                Powered by SupportBot
+                Powered by Kuboid
               </p>
             )}
           </div>

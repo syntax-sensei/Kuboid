@@ -55,7 +55,7 @@ try:
 except Exception:
     try:
         # Try package-style import
-        from RAG.config import Config
+        from config import Config
     except Exception:
         # Fallback: add current directory to sys.path and import by module name
         current_dir = Path(__file__).resolve().parent
@@ -797,7 +797,9 @@ class WidgetChatRequest(BaseModel):
 
 
 class WidgetCreateRequest(BaseModel):
-    site_id: str
+    # Allow omission of site_id from clients: when not provided the server will
+    # generate a new site id and create a minimal site record for the owner.
+    site_id: str | None = None
     name: str | None = None
     allowed_origins: List[str] | None = None
 
@@ -828,6 +830,8 @@ def _extract_user_id_from_auth(authorization: str | None) -> str:
 def _record_chat_turn(
     *,
     owner_id: str,
+    widget_id: str | None = None,
+    site_id: str | None = None,
     conversation_id: str,
     user_message: str,
     assistant_message: str | None,
@@ -835,17 +839,34 @@ def _record_chat_turn(
     metadata: Dict[str, Any] | None = None,
 ) -> Optional[str]:
     try:
+        # site_id is required by the DB; if not provided, don't attempt insert
+        if not site_id:
+            logger.error("Missing site_id when attempting to record chat turn; owner_id=%s widget_id=%s conversation_id=%s", owner_id, widget_id, conversation_id)
+            return None
+
         payload = {
             "conversation_id": conversation_id,
-            "owner_id": owner_id,
+            # Persist the owner as user_id in chat_turns so analytics and FK constraints match
+            "user_id": owner_id,
+            "site_id": site_id,
+            # Optionally include widget_id so DB trigger and queries can map back to the widget
+            **({"widget_id": widget_id} if widget_id else {}),
             "user_message": user_message,
             "assistant_message": assistant_message,
             "status": status,
             "metadata": metadata or {},
         }
         response = supabase.table("chat_turns").insert(payload).execute()
+        # Log any supabase-side errors to help debugging why columns may be missing
+        if hasattr(response, "error") and response.error:
+            logger.error("Supabase error inserting chat_turn: %s; payload=%s", getattr(response, 'error'), {k: v for k, v in payload.items() if k != 'metadata'})
+            return None
+
         if response.data:
             return response.data[0].get("id")
+
+        # No data returned (unexpected) — log payload for investigation
+        logger.warning("Supabase insert returned no data for chat_turns; payload=%s", {k: v for k, v in payload.items() if k != 'metadata'})
         return None
     except Exception as exc:
         logger.warning("Failed to record chat turn: %s", exc, exc_info=True)
@@ -1050,21 +1071,24 @@ async def create_widget(request: WidgetCreateRequest, authorization: str = Heade
         import uuid
         widget_id = str(uuid.uuid4())
 
+        # Allow server-side generation of a site id when caller omitted it.
+        site_id_to_use = request.site_id or str(uuid.uuid4())
+
         payload = {
             "id": widget_id,
-            "site_id": request.site_id,
+            "site_id": site_id_to_use,
             "owner_id": owner_id,
             "name": request.name,
             "allowed_origins": request.allowed_origins or [],
-                # Generate a per-widget secret hash for server-to-server flows (stored in `secret_hash` column)
-                "secret_hash": None,
+            # Generate a per-widget secret hash for server-to-server flows (stored in `secret_hash` column)
+            "secret_hash": None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         # Ensure the site exists (widgets.site_id has FK to sites.id). If the site
         # doesn't exist, create it for this owner (best-effort) to avoid FK errors.
         try:
-            site_resp = supabase.table("sites").select("*").eq("id", request.site_id).limit(1).execute()
+            site_resp = supabase.table("sites").select("*").eq("id", site_id_to_use).limit(1).execute()
             site_rows = site_resp.data if site_resp and hasattr(site_resp, "data") else []
         except Exception as exc:
             logger.warning(f"Failed to check site existence: {exc}")
@@ -1074,9 +1098,9 @@ async def create_widget(request: WidgetCreateRequest, authorization: str = Heade
             # Create a minimal site record so widget FK constraint is satisfied
             try:
                 site_payload = {
-                    "id": request.site_id,
+                    "id": site_id_to_use,
                     "user_id": owner_id,
-                    "name": request.site_id,
+                    "name": site_id_to_use,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 create_site_resp = supabase.table("sites").insert(site_payload).execute()
@@ -1084,10 +1108,10 @@ async def create_widget(request: WidgetCreateRequest, authorization: str = Heade
                     logger.error("Failed to create site record: %s", create_site_resp.error)
                     # Let the error surface to client
                     raise Exception(getattr(create_site_resp, "error", "Could not create site"))
-                logger.info("Created site record for id=%s", request.site_id)
+                logger.info("Created site record for id=%s", site_id_to_use)
             except Exception as exc:
                 logger.exception("Failed to create site required for widget: %s", exc)
-                raise HTTPException(status_code=500, detail=f"Could not create site {request.site_id}: {exc}")
+                raise HTTPException(status_code=500, detail=f"Could not create site {site_id_to_use}: {exc}")
 
         import secrets
         # create a widget secret and include its HMAC-SHA256 in payload under `secret_hash`
@@ -1322,8 +1346,12 @@ async def widget_chat(request: WidgetChatRequest, authorization: str = Header(No
 
         turn_id = None
         if conversation_id:
+            # Provide site_id from the widget so chat_turns.site_id (NOT NULL) is populated
+            site_id = widget.get("site_id") if widget else None
             turn_id = _record_chat_turn(
                 owner_id=owner_id,
+                widget_id=widget_id,
+                site_id=site_id,
                 conversation_id=conversation_id,
                 user_message=request.query,
                 assistant_message=answer,

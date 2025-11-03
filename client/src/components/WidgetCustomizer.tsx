@@ -14,7 +14,7 @@ export type WidgetConfig = {
   siteId?: string;
   topK: number;
   temperature: number;
-  apiBase: string;
+  apiBase?: string;
 };
 
 export type WidgetCustomizerProps = {
@@ -117,18 +117,7 @@ export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Site ID is now managed server-side; removed from UI */}
-            <div className="space-y-2">
-              <Label htmlFor="api-base">API Base URL</Label>
-              <Input
-                id="api-base"
-                value={config.apiBase}
-                onChange={(e) => updateConfig("apiBase", e.target.value)}
-                data-testid="input-customizer-api-base"
-              />
-            </div>
-          </div>
+          {/* API base is auto-set by the app and not editable in the customizer */}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -160,7 +149,7 @@ export function WidgetCustomizer({ config, onChange }: WidgetCustomizerProps) {
 
           <div className="flex items-center justify-between">
             <Label htmlFor="show-branding" className="font-normal">
-              Show SupportBot Branding
+              Show Kuboid Branding
             </Label>
             <Switch
               id="show-branding"

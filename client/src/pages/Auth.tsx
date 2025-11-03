@@ -30,7 +30,7 @@ export default function Auth() {
 
         toast({
           title: "Logged in successfully",
-          description: "Welcome back to SupportBot!",
+          description: "Welcome back to Kuboid!",
         });
 
         shouldRedirect = true;
@@ -50,7 +50,7 @@ export default function Auth() {
           title: "Account created",
           description: needsEmailConfirmation
             ? "Check your email to confirm your account."
-            : "Welcome to SupportBot!",
+            : "Welcome to Kuboid!",
         });
 
         shouldRedirect = !needsEmailConfirmation;

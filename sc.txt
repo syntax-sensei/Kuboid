@@ -1,6 +1,13 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.analytics_backfill_audit (
+  backfill_id uuid DEFAULT gen_random_uuid(),
+  backfilled_at timestamp with time zone DEFAULT now(),
+  tbl text,
+  row jsonb,
+  row_data jsonb
+);
 CREATE TABLE public.analytics_common_issues (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   site_id text NOT NULL,
@@ -33,7 +40,9 @@ CREATE TABLE public.analytics_top_queries (
   topic text NOT NULL,
   value integer NOT NULL DEFAULT 0,
   captured_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
-  CONSTRAINT analytics_top_queries_pkey PRIMARY KEY (id)
+  user_id uuid,
+  CONSTRAINT analytics_top_queries_pkey PRIMARY KEY (id),
+  CONSTRAINT analytics_top_queries_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.analytics_weekly_trend (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -41,7 +50,9 @@ CREATE TABLE public.analytics_weekly_trend (
   day date NOT NULL,
   value integer NOT NULL DEFAULT 0,
   created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
-  CONSTRAINT analytics_weekly_trend_pkey PRIMARY KEY (id)
+  user_id uuid,
+  CONSTRAINT analytics_weekly_trend_pkey PRIMARY KEY (id),
+  CONSTRAINT analytics_weekly_trend_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.chat_feedback (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -52,8 +63,10 @@ CREATE TABLE public.chat_feedback (
   notes text,
   created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  user_id uuid,
   CONSTRAINT chat_feedback_pkey PRIMARY KEY (id),
-  CONSTRAINT chat_feedback_turn_id_fkey FOREIGN KEY (turn_id) REFERENCES public.chat_turns(id)
+  CONSTRAINT chat_feedback_turn_id_fkey FOREIGN KEY (turn_id) REFERENCES public.chat_turns(id),
+  CONSTRAINT chat_feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.chat_turns (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -65,8 +78,10 @@ CREATE TABLE public.chat_turns (
   status text NOT NULL DEFAULT 'resolved'::text CHECK (status = ANY (ARRAY['resolved'::text, 'gap'::text, 'escalated'::text, 'deflected'::text])),
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   user_id uuid,
+  widget_id uuid,
   CONSTRAINT chat_turns_pkey PRIMARY KEY (id),
-  CONSTRAINT chat_turns_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT chat_turns_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT chat_turns_widget_id_fkey FOREIGN KEY (widget_id) REFERENCES public.widgets(id)
 );
 CREATE TABLE public.document_processing_status (
   id text NOT NULL,
@@ -78,22 +93,6 @@ CREATE TABLE public.document_processing_status (
   completed_at timestamp with time zone,
   updated_at timestamp with time zone,
   CONSTRAINT document_processing_status_pkey PRIMARY KEY (id)
-);
-CREATE TABLE public.documents (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  file_path text NOT NULL,
-  file_name text NOT NULL,
-  user_id uuid NOT NULL,
-  chunks_count integer DEFAULT 0,
-  text_length integer DEFAULT 0,
-  processed_at timestamp with time zone DEFAULT now(),
-  status text DEFAULT 'processing'::text,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  site_id text,
-  CONSTRAINT documents_pkey PRIMARY KEY (id),
-  CONSTRAINT documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
-  CONSTRAINT documents_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id)
 );
 CREATE TABLE public.knowledge_gaps (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
@@ -159,6 +158,7 @@ CREATE TABLE public.widgets (
   secret text,
   allowed_origins ARRAY DEFAULT '{}'::text[],
   created_at timestamp with time zone DEFAULT now(),
+  secret_hash text,
   CONSTRAINT widgets_pkey PRIMARY KEY (id),
   CONSTRAINT widgets_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id),
   CONSTRAINT widgets_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id)
